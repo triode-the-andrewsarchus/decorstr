@@ -24,6 +24,8 @@ class DecorstrGLSurfaceView @JvmOverloads constructor(
     })
 
     private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDown(e: MotionEvent): Boolean = true
+
         override fun onDoubleTap(e: MotionEvent): Boolean {
             onToggleAspect?.invoke()
             return true

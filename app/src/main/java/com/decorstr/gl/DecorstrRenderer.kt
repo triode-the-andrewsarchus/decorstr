@@ -99,6 +99,81 @@ class DecorstrRenderer(
         }
     }
 
+    @Volatile var currentScaleX = 1.0f
+        private set
+    @Volatile var currentScaleY = 1.0f
+        private set
+
+    /**
+     * Maps screen touch coordinate (x, y in view pixels) to normalized camera sensor coordinate (u, v in [0, 1]).
+     * Accounts for letterboxing/crop (scaleX, scaleY), sensor orientation (90/180/270/0), and front/back mirroring.
+     */
+    fun mapScreenToNormalizedSensor(screenX: Float, screenY: Float): Pair<Float, Float>? {
+        val sW = surfaceWidth
+        val sH = surfaceHeight
+        if (sW <= 0 || sH <= 0) return null
+
+        val ndcX = (2.0f * screenX / sW.toFloat()) - 1.0f
+        val ndcY = 1.0f - (2.0f * screenY / sH.toFloat())
+
+        val sX = if (currentScaleX > 0.001f) currentScaleX else 1.0f
+        val sY = if (currentScaleY > 0.001f) currentScaleY else 1.0f
+
+        val quadX = (ndcX / sX).coerceIn(-1.0f, 1.0f)
+        val quadY = (ndcY / sY).coerceIn(-1.0f, 1.0f)
+
+        // Quad [-1, 1] to fraction [0, 1]
+        val tx = (quadX + 1.0f) * 0.5f
+        val ty = (1.0f - quadY) * 0.5f
+
+        val uvs = when (cameraRotation) {
+            90 -> floatArrayOf(
+                1f, 1f, // BL: 0, 1
+                1f, 0f, // BR: 2, 3
+                0f, 1f, // TL: 4, 5
+                0f, 0f  // TR: 6, 7
+            )
+            180 -> floatArrayOf(
+                1f, 0f,
+                0f, 0f,
+                1f, 1f,
+                0f, 1f
+            )
+            270 -> floatArrayOf(
+                0f, 0f,
+                0f, 1f,
+                1f, 0f,
+                1f, 1f
+            )
+            else -> floatArrayOf(
+                0f, 1f,
+                1f, 1f,
+                0f, 0f,
+                1f, 0f
+            )
+        }
+
+        if (isFrontCamera) {
+            val t0 = uvs[0]; val t1 = uvs[1]
+            uvs[0] = uvs[2]; uvs[1] = uvs[3]
+            uvs[2] = t0; uvs[3] = t1
+
+            val t4 = uvs[4]; val t5 = uvs[5]
+            uvs[4] = uvs[6]; uvs[5] = uvs[7]
+            uvs[6] = t4; uvs[7] = t5
+        }
+
+        val uTop = (1f - tx) * uvs[4] + tx * uvs[6]
+        val uBottom = (1f - tx) * uvs[0] + tx * uvs[2]
+        val u = ((1f - ty) * uTop + ty * uBottom).coerceIn(0f, 1f)
+
+        val vTop = (1f - tx) * uvs[5] + tx * uvs[7]
+        val vBottom = (1f - tx) * uvs[1] + tx * uvs[3]
+        val v = ((1f - ty) * vTop + ty * vBottom).coerceIn(0f, 1f)
+
+        return Pair(u, v)
+    }
+
     // Temporal accumulation (Live stability denoiser)
     @Volatile var stabilityScore: Float = 0.0f
     @Volatile var isDenoiseEnabled: Boolean = true
@@ -284,6 +359,8 @@ class DecorstrRenderer(
             }
         }
 
+        currentScaleX = scaleX
+        currentScaleY = scaleY
         GLES30.glUniform2f(uScaleLoc, scaleX, scaleY)
 
         val denoiseActive = isDenoiseEnabled && accumFboId != 0

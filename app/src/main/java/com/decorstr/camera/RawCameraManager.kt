@@ -3,12 +3,15 @@ package com.decorstr.camera
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.ImageFormat
+import android.graphics.Rect
 import android.hardware.camera2.*
+import android.hardware.camera2.params.MeteringRectangle
 import android.media.Image
 import android.media.ImageReader
 import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.Log
 import android.util.Size
 import com.decorstr.engine.DecorrelationEngine
@@ -38,12 +41,20 @@ class RawCameraManager(
 
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // Storage and capture state
     private val mediaSaver = MediaSaver(context)
     private val captureExecutor = Executors.newSingleThreadExecutor()
     @Volatile private var latestCaptureResult: TotalCaptureResult? = null
     private var activeCharacteristics: CameraCharacteristics? = null
+
+    // Touch-to-focus state
+    private var previewRequestBuilder: CaptureRequest.Builder? = null
+    @Volatile private var isFocusTriggerActive = false
+    @Volatile private var hasSeenActiveScan = false
+    private var focusCallback: ((Boolean) -> Unit)? = null
+    private var focusTriggerTimestamp = 0L
 
     @Volatile private var isCaptureRequested = false
     private var pendingCaptureCallback: ((Uri?, Uri?) -> Unit)? = null
@@ -212,6 +223,7 @@ class RawCameraManager(
     }
 
     private fun inspectAndConfigureMetadata(chars: CameraCharacteristics) {
+        activeCharacteristics = chars
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return
 
         // 1. Determine optimal RAW format
@@ -256,6 +268,160 @@ class RawCameraManager(
         Log.i(TAG, "Configured CFA: $activeCfaPattern, BlackLevel: ${activeBlackLevels.contentToString()}, WhiteLevel: $activeWhiteLevel, Orientation: $sensorOrientation, isFront: $isFront")
     }
 
+    private val repeatingCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult
+        ) {
+            latestCaptureResult = result
+            val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            if (gains != null) {
+                val r = gains.red
+                val g = (gains.greenEven + gains.greenOdd) * 0.5f
+                val b = gains.blue
+                if (g > 0.001f) {
+                    val rNorm = r / g
+                    val bNorm = b / g
+                    renderer.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                    decorEngine.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                }
+            }
+
+            if (isFocusTriggerActive) {
+                val afState = result.get(CaptureResult.CONTROL_AF_STATE) ?: CaptureResult.CONTROL_AF_STATE_INACTIVE
+                val elapsed = System.currentTimeMillis() - focusTriggerTimestamp
+
+                if (afState == CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN) {
+                    hasSeenActiveScan = true
+                }
+
+                val isTerminalState = (hasSeenActiveScan || elapsed > 350) &&
+                    (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+                     afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED)
+
+                if (isTerminalState || elapsed > 3000) {
+                    isFocusTriggerActive = false
+                    val success = (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) ||
+                                  (afState != CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED && elapsed > 3000)
+                    Log.i(TAG, "AF completed: state=$afState success=$success elapsed=${elapsed}ms")
+                    val cb = focusCallback
+                    focusCallback = null
+                    cb?.let { mainHandler.post { it.invoke(success) } }
+                }
+            }
+        }
+    }
+
+    fun triggerFocus(normX: Float, normY: Float, callback: ((Boolean) -> Unit)? = null) {
+        backgroundHandler?.post {
+            val session = captureSession ?: run {
+                mainHandler.post { callback?.invoke(false) }
+                return@post
+            }
+            val builder = previewRequestBuilder ?: run {
+                mainHandler.post { callback?.invoke(false) }
+                return@post
+            }
+            val chars = activeCharacteristics ?: run {
+                mainHandler.post { callback?.invoke(false) }
+                return@post
+            }
+
+            val maxAf = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+            val maxAe = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
+            if (maxAf == 0 && maxAe == 0) {
+                Log.i(TAG, "Device does not support AF/AE metering regions")
+                mainHandler.post { callback?.invoke(false) }
+                return@post
+            }
+
+            val activeArray = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                ?: Rect(0, 0, previewSize.width, previewSize.height)
+
+            val sensorX = (normX * activeArray.width()).toInt().coerceIn(0, activeArray.width() - 1)
+            val sensorY = (normY * activeArray.height()).toInt().coerceIn(0, activeArray.height() - 1)
+
+            val halfW = (activeArray.width() * 0.06f).toInt().coerceAtLeast(60)
+            val halfH = (activeArray.height() * 0.06f).toInt().coerceAtLeast(60)
+
+            val left = (sensorX - halfW).coerceIn(activeArray.left, activeArray.right - 1)
+            val top = (sensorY - halfH).coerceIn(activeArray.top, activeArray.bottom - 1)
+            val right = (sensorX + halfW).coerceIn(left + 1, activeArray.right)
+            val bottom = (sensorY + halfH).coerceIn(top + 1, activeArray.bottom)
+
+            val meterRect = MeteringRectangle(Rect(left, top, right, bottom), MeteringRectangle.METERING_WEIGHT_MAX)
+            val regions = arrayOf(meterRect)
+            Log.i(TAG, "Triggering AF at sensor ($sensorX, $sensorY) rect: [$left, $top, $right, $bottom] maxAf: $maxAf maxAe: $maxAe")
+
+            isFocusTriggerActive = true
+            hasSeenActiveScan = false
+            focusCallback = callback
+            focusTriggerTimestamp = System.currentTimeMillis()
+
+            try {
+                // 1. Cancel ongoing AF trigger to reset AF state machine
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
+                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                session.capture(builder.build(), null, backgroundHandler)
+
+                // 2. Set regions and AUTO mode in repeating stream
+                if (maxAf > 0) {
+                    builder.set(CaptureRequest.CONTROL_AF_REGIONS, regions)
+                }
+                if (maxAe > 0) {
+                    builder.set(CaptureRequest.CONTROL_AE_REGIONS, regions)
+                }
+                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                session.setRepeatingRequest(builder.build(), repeatingCaptureCallback, backgroundHandler)
+
+                // 3. Trigger AF scan and AE precapture
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+                if (maxAe > 0) {
+                    builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START)
+                }
+                session.capture(builder.build(), repeatingCaptureCallback, backgroundHandler)
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                if (maxAe > 0) {
+                    builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error triggering focus", e)
+                isFocusTriggerActive = false
+                val cb = focusCallback
+                focusCallback = null
+                cb?.let { mainHandler.post { it.invoke(false) } }
+            }
+        }
+    }
+
+    fun resetFocus() {
+        backgroundHandler?.post {
+            val session = captureSession ?: return@post
+            val builder = previewRequestBuilder ?: return@post
+            val chars = activeCharacteristics ?: return@post
+            try {
+                isFocusTriggerActive = false
+                focusCallback = null
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
+                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                val maxAf = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+                val maxAe = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
+                if (maxAf > 0) {
+                    builder.set(CaptureRequest.CONTROL_AF_REGIONS, null)
+                }
+                if (maxAe > 0) {
+                    builder.set(CaptureRequest.CONTROL_AE_REGIONS, null)
+                }
+                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                session.setRepeatingRequest(builder.build(), repeatingCaptureCallback, backgroundHandler)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resetting focus", e)
+            }
+        }
+    }
+
     private fun createCaptureSession() {
         val device = cameraDevice ?: return
         if (!isStarted) return
@@ -279,6 +445,7 @@ class RawCameraManager(
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
             }
+            previewRequestBuilder = requestBuilder
 
             device.createCaptureSession(
                 listOf(surface),
@@ -292,27 +459,7 @@ class RawCameraManager(
                         try {
                             session.setRepeatingRequest(
                                 requestBuilder.build(),
-                                object : CameraCaptureSession.CaptureCallback() {
-                                    override fun onCaptureCompleted(
-                                        session: CameraCaptureSession,
-                                        request: CaptureRequest,
-                                        result: TotalCaptureResult
-                                    ) {
-                                        latestCaptureResult = result
-                                        val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
-                                        if (gains != null) {
-                                            val r = gains.red
-                                            val g = (gains.greenEven + gains.greenOdd) * 0.5f
-                                            val b = gains.blue
-                                            if (g > 0.001f) {
-                                                val rNorm = r / g
-                                                val bNorm = b / g
-                                                renderer.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
-                                                decorEngine.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
-                                            }
-                                        }
-                                    }
-                                },
+                                repeatingCaptureCallback,
                                 backgroundHandler
                             )
                         } catch (e: Exception) {
@@ -461,6 +608,9 @@ class RawCameraManager(
             Log.w(TAG, "Interrupted waiting for in-flight capture", e)
         }
         try {
+            previewRequestBuilder = null
+            isFocusTriggerActive = false
+            focusCallback = null
             captureSession?.close()
             captureSession = null
             cameraDevice?.close()

@@ -18,12 +18,14 @@ import com.decorstr.engine.DecorrelationEngine
 import com.decorstr.gl.DecorstrGLSurfaceView
 import com.decorstr.gl.DecorstrRenderer
 import com.decorstr.sensors.StabilityTracker
+import com.decorstr.ui.FocusRingView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.ChipGroup
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var glSurfaceView: DecorstrGLSurfaceView
+    private lateinit var focusRingView: FocusRingView
     private lateinit var renderer: DecorstrRenderer
     private lateinit var decorEngine: DecorrelationEngine
     private lateinit var cameraManager: RawCameraManager
@@ -82,15 +84,31 @@ class MainActivity : AppCompatActivity() {
         btnAspect = findViewById(R.id.btnAspect)
         btnCapture = findViewById(R.id.btnCapture)
         chipGroupPresets = findViewById(R.id.chipGroupPresets)
+        focusRingView = findViewById(R.id.focusRingView)
 
         // Initialize decorrelation engine and renderer
         decorEngine = DecorrelationEngine()
         renderer = DecorstrRenderer(this, decorEngine)
         glSurfaceView.setRenderer(renderer)
 
+        // Single tap preview surface triggers touch-to-focus
+        glSurfaceView.onFocusTap = { x, y ->
+            focusRingView.showAt(x, y)
+            val normCoord = renderer.mapScreenToNormalizedSensor(x, y)
+            if (normCoord != null) {
+                cameraManager.triggerFocus(normCoord.first, normCoord.second) { success ->
+                    focusRingView.onFocusLocked(success)
+                }
+            } else {
+                focusRingView.onFocusLocked(false)
+            }
+        }
+
         // Double tap preview surface toggles Fit/Fill
         glSurfaceView.onToggleAspect = {
             runOnUiThread {
+                cameraManager.resetFocus()
+                focusRingView.hide()
                 renderer.toggleAspect()
                 btnAspect.text = if (renderer.isAspectFill) "FILL" else "FIT"
                 val mode = if (renderer.isAspectFill) "Fill (Crop)" else "Fit (Letterbox)"
@@ -193,7 +211,9 @@ class MainActivity : AppCompatActivity() {
 
         // Switch Camera
         btnSwitchCam.setOnClickListener {
+            focusRingView.hide()
             renderer.resetAccumulation()
+            cameraManager.resetFocus()
             cameraManager.switchCamera()
         }
 
@@ -238,6 +258,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        focusRingView.hide()
         stabilityTracker.stop()
         cameraManager.stop()
         glSurfaceView.onPause()
