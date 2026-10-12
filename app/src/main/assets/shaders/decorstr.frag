@@ -12,6 +12,7 @@ uniform vec4 u_BlackLevel;
 uniform float u_WhiteLevel;
 uniform mat3 u_DecorrelationMatrix;
 uniform vec3 u_DecorrelationBias;
+uniform vec3 u_WbGains; // Red, Green, Blue white balance multipliers
 uniform int u_ColorSpace; // 0=RGB, 1=LAB, 2=YUV, 3=DIRECT_PCA, 4=RAW_NORMAL
 uniform float u_Gamma;
 uniform float u_Contrast;
@@ -65,6 +66,12 @@ vec3 demosaicQuad(ivec2 p, int pattern) {
         g = (p10 + p01) * 0.5;
         b = p00;
     }
+
+    // Apply Auto White Balance Gains
+    vec3 wb = max(vec3(0.01), u_WbGains);
+    r = clamp(r * wb.r, 0.0, 1.0);
+    g = clamp(g * wb.g, 0.0, 1.0);
+    b = clamp(b * wb.b, 0.0, 1.0);
 
     return vec3(r, g, b);
 }

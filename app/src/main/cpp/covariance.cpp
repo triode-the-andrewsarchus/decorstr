@@ -42,6 +42,7 @@ CovarianceResult estimateCovarianceBayer16(
     int bayerPattern,
     const float blackLevels[4],
     float whiteLevel,
+    const float wbGains[3],
     ColorSpaceMode colorSpace,
     int targetSamplesX,
     int targetSamplesY)
@@ -75,6 +76,12 @@ CovarianceResult estimateCovarianceBayer16(
 
             float r, g, b;
             extractBayerRgb(p00, p01, p10, p11, bayerPattern, r, g, b);
+
+            if (wbGains != nullptr) {
+                r = std::clamp(r * wbGains[0], 0.0f, 1.0f);
+                g = std::clamp(g * wbGains[1], 0.0f, 1.0f);
+                b = std::clamp(b * wbGains[2], 0.0f, 1.0f);
+            }
 
             // Outlier rejection: reject overexposed highlights and extreme black floor noise
             if ((r > 0.985f && g > 0.985f && b > 0.985f) || (r < 0.005f && g < 0.005f && b < 0.005f)) {
@@ -139,6 +146,7 @@ CovarianceResult estimateCovarianceBayer10(
     int bayerPattern,
     const float blackLevels[4],
     float whiteLevel,
+    const float wbGains[3],
     ColorSpaceMode colorSpace,
     int targetSamplesX,
     int targetSamplesY)
@@ -181,6 +189,12 @@ CovarianceResult estimateCovarianceBayer10(
 
             float r, g, b;
             extractBayerRgb(p00, p01, p10, p11, bayerPattern, r, g, b);
+
+            if (wbGains != nullptr) {
+                r = std::clamp(r * wbGains[0], 0.0f, 1.0f);
+                g = std::clamp(g * wbGains[1], 0.0f, 1.0f);
+                b = std::clamp(b * wbGains[2], 0.0f, 1.0f);
+            }
 
             if ((r > 0.985f && g > 0.985f && b > 0.985f) || (r < 0.005f && g < 0.005f && b < 0.005f)) {
                 continue;

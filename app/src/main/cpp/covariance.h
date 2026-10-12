@@ -22,6 +22,7 @@ CovarianceResult estimateCovarianceBayer16(
     int bayerPattern, // 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
     const float blackLevels[4],
     float whiteLevel,
+    const float wbGains[3],
     ColorSpaceMode colorSpace,
     int targetSamplesX = 160,
     int targetSamplesY = 120
@@ -36,6 +37,7 @@ CovarianceResult estimateCovarianceBayer10(
     int bayerPattern,
     const float blackLevels[4],
     float whiteLevel,
+    const float wbGains[3],
     ColorSpaceMode colorSpace,
     int targetSamplesX = 160,
     int targetSamplesY = 120

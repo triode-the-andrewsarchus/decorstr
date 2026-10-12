@@ -38,11 +38,13 @@ class DecorstrRenderer(
     private var uGammaLoc = -1
     private var uContrastLoc = -1
     private var uScaleLoc = -1
+    private var uWbGainsLoc = -1
 
     // Frame configuration
     var cfaPattern: Int = 0 // 0=RGGB
     val blackLevels = floatArrayOf(64f, 64f, 64f, 64f)
     var whiteLevel: Float = 1023f
+    val whiteBalanceGains = floatArrayOf(2.0f, 1.0f, 1.8f)
     var gamma: Float = 2.2f
     var contrast: Float = 1.0f
 
@@ -86,6 +88,14 @@ class DecorstrRenderer(
 
     fun toggleAspect() {
         isAspectFill = !isAspectFill
+    }
+
+    fun setWhiteBalanceGains(r: Float, g: Float, b: Float) {
+        synchronized(frameLock) {
+            whiteBalanceGains[0] = 0.8f * whiteBalanceGains[0] + 0.2f * r
+            whiteBalanceGains[1] = 0.8f * whiteBalanceGains[1] + 0.2f * g
+            whiteBalanceGains[2] = 0.8f * whiteBalanceGains[2] + 0.2f * b
+        }
     }
 
     private var isOffscreenCapturePending = false
@@ -172,6 +182,7 @@ class DecorstrRenderer(
         GLES30.glUniform1i(uColorSpaceLoc, decorEngine.activeColorSpace.id)
         GLES30.glUniform1f(uGammaLoc, gamma)
         GLES30.glUniform1f(uContrastLoc, contrast)
+        GLES30.glUniform3f(uWbGainsLoc, whiteBalanceGains[0], whiteBalanceGains[1], whiteBalanceGains[2])
 
         // Calculate aspect scale to completely eliminate squishing
         val isRotated = (cameraRotation == 90 || cameraRotation == 270)
@@ -286,6 +297,7 @@ class DecorstrRenderer(
         GLES30.glUniform1i(uColorSpaceLoc, decorEngine.activeColorSpace.id)
         GLES30.glUniform1f(uGammaLoc, gamma)
         GLES30.glUniform1f(uContrastLoc, contrast)
+        GLES30.glUniform3f(uWbGainsLoc, whiteBalanceGains[0], whiteBalanceGains[1], whiteBalanceGains[2])
 
         // 1.0f scale fills the 12MP FBO completely
         GLES30.glUniform2f(uScaleLoc, 1.0f, 1.0f)
@@ -361,6 +373,7 @@ class DecorstrRenderer(
             uGammaLoc = GLES30.glGetUniformLocation(programId, "u_Gamma")
             uContrastLoc = GLES30.glGetUniformLocation(programId, "u_Contrast")
             uScaleLoc = GLES30.glGetUniformLocation(programId, "u_Scale")
+            uWbGainsLoc = GLES30.glGetUniformLocation(programId, "u_WbGains")
             Log.i(TAG, "Shaders linked successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Error setting up shaders", e)

@@ -299,6 +299,18 @@ class RawCameraManager(
                                         result: TotalCaptureResult
                                     ) {
                                         latestCaptureResult = result
+                                        val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                                        if (gains != null) {
+                                            val r = gains.red
+                                            val g = (gains.greenEven + gains.greenOdd) * 0.5f
+                                            val b = gains.blue
+                                            if (g > 0.001f) {
+                                                val rNorm = r / g
+                                                val bNorm = b / g
+                                                renderer.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                                                decorEngine.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                                            }
+                                        }
                                     }
                                 },
                                 backgroundHandler

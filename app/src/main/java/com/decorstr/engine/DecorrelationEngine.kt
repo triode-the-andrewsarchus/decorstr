@@ -38,6 +38,17 @@ class DecorrelationEngine {
         currentEigenvalues.fill(1f)
     }
 
+    // White balance multipliers (R, G, B)
+    val whiteBalanceGains = floatArrayOf(2.0f, 1.0f, 1.8f)
+
+    fun setWhiteBalanceGains(r: Float, g: Float, b: Float) {
+        synchronized(this) {
+            whiteBalanceGains[0] = 0.8f * whiteBalanceGains[0] + 0.2f * r
+            whiteBalanceGains[1] = 0.8f * whiteBalanceGains[1] + 0.2f * g
+            whiteBalanceGains[2] = 0.8f * whiteBalanceGains[2] + 0.2f * b
+        }
+    }
+
     /**
      * Process RAW16 (ImageFormat.RAW_SENSOR) frame.
      * Updates [currentMatrix], [currentBias], and [currentEigenvalues].
@@ -59,6 +70,7 @@ class DecorrelationEngine {
             bayerPattern,
             blackLevels,
             whiteLevel,
+            whiteBalanceGains,
             activeColorSpace,
             alphaSmoothing,
             isTransformLocked,
@@ -97,6 +109,7 @@ class DecorrelationEngine {
             bayerPattern,
             blackLevels,
             whiteLevel,
+            whiteBalanceGains,
             activeColorSpace,
             alphaSmoothing,
             isTransformLocked,
@@ -227,14 +240,18 @@ class DecorrelationEngine {
                     else -> { b = p00; g = (p01 + p10) * 0.5f; r = p11 } // BGGR
                 }
 
-                if ((r > 0.98f && g > 0.98f && b > 0.98f) || (r < 0.01f && g < 0.01f && b < 0.01f)) {
+                val rWb = (r * whiteBalanceGains[0]).coerceIn(0f, 1f)
+                val gWb = (g * whiteBalanceGains[1]).coerceIn(0f, 1f)
+                val bWb = (b * whiteBalanceGains[2]).coerceIn(0f, 1f)
+
+                if ((rWb > 0.98f && gWb > 0.98f && bWb > 0.98f) || (rWb < 0.01f && gWb < 0.01f && bWb < 0.01f)) {
                     continue
                 }
 
-                sum[0] += r.toDouble(); sum[1] += g.toDouble(); sum[2] += b.toDouble()
-                sumSq[0] += (r * r).toDouble(); sumSq[1] += (r * g).toDouble(); sumSq[2] += (r * b).toDouble()
-                sumSq[3] += (g * r).toDouble(); sumSq[4] += (g * g).toDouble(); sumSq[5] += (g * b).toDouble()
-                sumSq[6] += (b * r).toDouble(); sumSq[7] += (b * g).toDouble(); sumSq[8] += (b * b).toDouble()
+                sum[0] += rWb.toDouble(); sum[1] += gWb.toDouble(); sum[2] += bWb.toDouble()
+                sumSq[0] += (rWb * rWb).toDouble(); sumSq[1] += (rWb * gWb).toDouble(); sumSq[2] += (rWb * bWb).toDouble()
+                sumSq[3] += (gWb * rWb).toDouble(); sumSq[4] += (gWb * gWb).toDouble(); sumSq[5] += (gWb * bWb).toDouble()
+                sumSq[6] += (bWb * rWb).toDouble(); sumSq[7] += (bWb * gWb).toDouble(); sumSq[8] += (bWb * bWb).toDouble()
                 count++
             }
         }

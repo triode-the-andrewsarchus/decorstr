@@ -36,6 +36,7 @@ Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer16(
     jint bayerPattern,
     jfloatArray jBlackLevels,
     jfloat whiteLevel,
+    jfloatArray jWbGains,
     jint colorSpaceMode,
     jfloat alphaSmoothing,
     jboolean lockTransform,
@@ -56,11 +57,16 @@ Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer16(
         env->GetFloatArrayRegion(jBlackLevels, 0, 4, blackLevels);
     }
 
+    jfloat wbGains[3] = {1.0f, 1.0f, 1.0f};
+    if (jWbGains != nullptr && env->GetArrayLength(jWbGains) >= 3) {
+        env->GetFloatArrayRegion(jWbGains, 0, 3, wbGains);
+    }
+
     auto mode = static_cast<decorstr::ColorSpaceMode>(colorSpaceMode);
 
     decorstr::CovarianceResult covRes = decorstr::estimateCovarianceBayer16(
         rawData, width, height, rowStridePixels, bayerPattern,
-        blackLevels, whiteLevel, mode
+        blackLevels, whiteLevel, wbGains, mode
     );
 
     decorstr::WhiteningResult whitened = gWhiteningEngine->updateAndCompute(
@@ -100,6 +106,7 @@ Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer10(
     jint bayerPattern,
     jfloatArray jBlackLevels,
     jfloat whiteLevel,
+    jfloatArray jWbGains,
     jint colorSpaceMode,
     jfloat alphaSmoothing,
     jboolean lockTransform,
@@ -120,11 +127,16 @@ Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer10(
         env->GetFloatArrayRegion(jBlackLevels, 0, 4, blackLevels);
     }
 
+    jfloat wbGains[3] = {1.0f, 1.0f, 1.0f};
+    if (jWbGains != nullptr && env->GetArrayLength(jWbGains) >= 3) {
+        env->GetFloatArrayRegion(jWbGains, 0, 3, wbGains);
+    }
+
     auto mode = static_cast<decorstr::ColorSpaceMode>(colorSpaceMode);
 
     decorstr::CovarianceResult covRes = decorstr::estimateCovarianceBayer10(
         rawData, width, height, rowStrideBytes, bayerPattern,
-        blackLevels, whiteLevel, mode
+        blackLevels, whiteLevel, wbGains, mode
     );
 
     decorstr::WhiteningResult whitened = gWhiteningEngine->updateAndCompute(
