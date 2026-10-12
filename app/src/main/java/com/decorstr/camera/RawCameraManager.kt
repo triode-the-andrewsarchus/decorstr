@@ -22,6 +22,13 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
+data class CameraChoice(
+    val index: Int,
+    val id: String,
+    val title: String,
+    val subtitle: String
+)
+
 class RawCameraManager(
     private val context: Context,
     private val renderer: DecorstrRenderer,
@@ -68,9 +75,11 @@ class RawCameraManager(
         }
     }
 
-    // Available RAW camera IDs
+    // Available RAW camera IDs and choices
     private val rawCameraIds = mutableListOf<String>()
-    private var currentCameraIndex = 0
+    val cameraChoices = mutableListOf<CameraChoice>()
+    var currentCameraIndex = 0
+        private set
 
     // Lifecycle state
     @Volatile private var isStarted = false
@@ -93,28 +102,71 @@ class RawCameraManager(
 
     private fun enumerateCameras() {
         rawCameraIds.clear()
+        cameraChoices.clear()
         try {
+            val candidates = mutableListOf<String>()
             for (id in cameraManager.cameraIdList) {
                 val chars = cameraManager.getCameraCharacteristics(id)
-                val facing = chars.get(CameraCharacteristics.LENS_FACING)
                 val caps = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-
                 val hasRaw = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
-                if (hasRaw && facing == CameraCharacteristics.LENS_FACING_BACK) {
-                    rawCameraIds.add(id)
-                    Log.i(TAG, "Found RAW-capable back camera: $id")
+                if (hasRaw) {
+                    candidates.add(id)
                 }
             }
 
-            if (rawCameraIds.isEmpty()) {
-                for (id in cameraManager.cameraIdList) {
-                    val chars = cameraManager.getCameraCharacteristics(id)
-                    val caps = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-                    if (caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) {
-                        rawCameraIds.add(id)
+            // Sort back cameras first, then front
+            candidates.sortBy { id ->
+                val chars = cameraManager.getCameraCharacteristics(id)
+                val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                if (facing == CameraCharacteristics.LENS_FACING_BACK) 0 else 1
+            }
+
+            for ((idx, id) in candidates.withIndex()) {
+                val chars = cameraManager.getCameraCharacteristics(id)
+                val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                val fl = focalLengths?.firstOrNull() ?: 0f
+                val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+
+                val equiv35mm = if (sensorSize != null && fl > 0f) {
+                    val sensorDiag = kotlin.math.sqrt(sensorSize.width * sensorSize.width + sensorSize.height * sensorSize.height)
+                    if (sensorDiag > 0.01f) {
+                        (fl * (43.27f / sensorDiag)).toInt()
+                    } else 0
+                } else 0
+
+                val title: String
+                val subtitle: String
+
+                if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                    title = "Front Camera"
+                    subtitle = "Camera $id • Selfie (RAW)"
+                } else {
+                    when {
+                        equiv35mm in 1..20 || (fl > 0f && fl < 3.0f) -> {
+                            title = "Ultra-Wide (0.6x)"
+                            subtitle = "Camera $id • ${if (equiv35mm > 0) "${equiv35mm}mm equiv" else "${fl}mm"}"
+                        }
+                        equiv35mm in 21..35 || (fl >= 3.0f && fl < 6.5f) -> {
+                            title = "Wide (1x) • Main"
+                            subtitle = "Camera $id • ${if (equiv35mm > 0) "${equiv35mm}mm equiv" else "${fl}mm"}"
+                        }
+                        equiv35mm > 35 || fl >= 6.5f -> {
+                            title = "Telephoto (3x)"
+                            subtitle = "Camera $id • ${if (equiv35mm > 0) "${equiv35mm}mm equiv" else "${fl}mm"}"
+                        }
+                        else -> {
+                            title = "Back Camera $id"
+                            subtitle = "Camera $id • RAW"
+                        }
                     }
                 }
+
+                rawCameraIds.add(id)
+                cameraChoices.add(CameraChoice(idx, id, title, subtitle))
+                Log.i(TAG, "Found RAW camera: id=$id title='$title' fl=${fl}mm equiv=${equiv35mm}mm")
             }
+
             Log.i(TAG, "Total RAW cameras available: ${rawCameraIds.size}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed enumerating cameras", e)
@@ -151,15 +203,20 @@ class RawCameraManager(
         }
     }
 
-    fun switchCamera() {
-        if (rawCameraIds.size <= 1) return
-        currentCameraIndex = (currentCameraIndex + 1) % rawCameraIds.size
+    fun selectCamera(index: Int) {
+        if (index !in rawCameraIds.indices || index == currentCameraIndex) return
+        currentCameraIndex = index
         backgroundHandler?.post {
             closeCameraInternal()
             if (isStarted) {
                 openCameraInternal(rawCameraIds[currentCameraIndex])
             }
         }
+    }
+
+    fun switchCamera() {
+        if (rawCameraIds.size <= 1) return
+        selectCamera((currentCameraIndex + 1) % rawCameraIds.size)
     }
 
     @SuppressLint("MissingPermission")

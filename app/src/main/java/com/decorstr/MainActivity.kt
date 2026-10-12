@@ -4,14 +4,22 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.RadioButton
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.ListPopupWindow
 import androidx.core.content.ContextCompat
+import com.decorstr.camera.CameraChoice
 import com.decorstr.camera.RawCameraManager
 import com.decorstr.engine.ColorSpace
 import com.decorstr.engine.DecorrelationEngine
@@ -30,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var decorEngine: DecorrelationEngine
     private lateinit var cameraManager: RawCameraManager
     private lateinit var stabilityTracker: StabilityTracker
+    private var cameraDropdown: ListPopupWindow? = null
 
     private var lastFps = 0.0f
     private var lastStableState = false
@@ -209,12 +218,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Switch Camera
+        // Switch Camera Dropdown
         btnSwitchCam.setOnClickListener {
-            focusRingView.hide()
-            renderer.resetAccumulation()
-            cameraManager.resetFocus()
-            cameraManager.switchCamera()
+            showCameraDropdown()
         }
 
         // Toggle Aspect Fit / Fill
@@ -244,6 +250,53 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun showCameraDropdown() {
+        val choices = cameraManager.cameraChoices
+        if (choices.isEmpty()) {
+            Toast.makeText(this, "No RAW cameras available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val adapter = object : ArrayAdapter<CameraChoice>(this, R.layout.item_camera_choice, choices) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val view = convertView ?: LayoutInflater.from(context).inflate(R.layout.item_camera_choice, parent, false)
+                val item = choices[position]
+                val rb = view.findViewById<RadioButton>(R.id.rbCamera)
+                val tvTitle = view.findViewById<TextView>(R.id.tvCameraTitle)
+                val tvSubtitle = view.findViewById<TextView>(R.id.tvCameraSubtitle)
+
+                tvTitle.text = item.title
+                tvSubtitle.text = item.subtitle
+                rb.isChecked = (position == cameraManager.currentCameraIndex)
+                return view
+            }
+        }
+
+        cameraDropdown?.dismiss()
+        val popup = ListPopupWindow(this).apply {
+            anchorView = btnSwitchCam
+            setDropDownGravity(Gravity.END)
+            setAdapter(adapter)
+            isModal = true
+            width = (240 * resources.displayMetrics.density).toInt()
+            verticalOffset = (6 * resources.displayMetrics.density).toInt()
+            setBackgroundDrawable(ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_dropdown_menu))
+            setOnItemClickListener { _, _, position, _ ->
+                dismiss()
+                if (position != cameraManager.currentCameraIndex) {
+                    renderer.resetAccumulation()
+                    cameraManager.resetFocus()
+                    focusRingView.hide()
+                    cameraManager.selectCamera(position)
+                    val chosen = choices[position]
+                    Toast.makeText(this@MainActivity, "Switched to ${chosen.title}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        cameraDropdown = popup
+        popup.show()
+    }
+
     override fun onResume() {
         super.onResume()
         glSurfaceView.onResume()
@@ -258,6 +311,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        cameraDropdown?.dismiss()
         focusRingView.hide()
         stabilityTracker.stop()
         cameraManager.stop()
