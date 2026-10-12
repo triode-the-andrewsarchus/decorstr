@@ -1,6 +1,7 @@
 package com.decorstr.gl
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.util.Log
@@ -85,6 +86,16 @@ class DecorstrRenderer(
 
     fun toggleAspect() {
         isAspectFill = !isAspectFill
+    }
+
+    private var isOffscreenCapturePending = false
+    private var offscreenCaptureCallback: ((Bitmap) -> Unit)? = null
+
+    fun requestOffscreenCapture(callback: (Bitmap) -> Unit) {
+        synchronized(frameLock) {
+            offscreenCaptureCallback = callback
+            isOffscreenCapturePending = true
+        }
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -200,6 +211,116 @@ class DecorstrRenderer(
         GLES30.glBindVertexArray(vaoId)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         GLES30.glBindVertexArray(0)
+
+        // Process full-resolution offscreen capture if requested
+        val offscreenCb: ((Bitmap) -> Unit)? = synchronized(frameLock) {
+            if (isOffscreenCapturePending) {
+                val cb = offscreenCaptureCallback
+                offscreenCaptureCallback = null
+                isOffscreenCapturePending = false
+                cb
+            } else {
+                null
+            }
+        }
+
+        if (offscreenCb != null && width > 0 && height > 0) {
+            renderOffscreenSnapshot(width, height, offscreenCb)
+        }
+    }
+
+    private fun renderOffscreenSnapshot(rawWidth: Int, rawHeight: Int, callback: (Bitmap) -> Unit) {
+        val isRotated = (cameraRotation == 90 || cameraRotation == 270)
+        val targetW = if (isRotated) rawHeight else rawWidth
+        val targetH = if (isRotated) rawWidth else rawHeight
+
+        val fbos = IntArray(1)
+        GLES30.glGenFramebuffers(1, fbos, 0)
+        val fboId = fbos[0]
+
+        val texs = IntArray(1)
+        GLES30.glGenTextures(1, texs, 0)
+        val colorTexId = texs[0]
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, colorTexId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, targetW, targetH, 0,
+            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, colorTexId, 0
+        )
+
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            Log.e(TAG, "Offscreen FBO incomplete status: $status")
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glDeleteTextures(1, texs, 0)
+            GLES30.glDeleteFramebuffers(1, fbos, 0)
+            return
+        }
+
+        GLES30.glViewport(0, 0, targetW, targetH)
+        GLES30.glClearColor(0f, 0f, 0f, 1f)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        GLES30.glUseProgram(programId)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
+        GLES30.glUniform1i(uRawTextureLoc, 0)
+
+        GLES30.glUniform2f(uTextureSizeLoc, rawWidth.toFloat(), rawHeight.toFloat())
+        GLES30.glUniform1i(uCfaPatternLoc, cfaPattern)
+        GLES30.glUniform4f(uBlackLevelLoc, blackLevels[0], blackLevels[1], blackLevels[2], blackLevels[3])
+        GLES30.glUniform1f(uWhiteLevelLoc, whiteLevel)
+        GLES30.glUniformMatrix3fv(uDecorMatrixLoc, 1, true, decorEngine.currentMatrix, 0)
+        GLES30.glUniform3fv(uDecorBiasLoc, 1, decorEngine.currentBias, 0)
+        GLES30.glUniform1i(uColorSpaceLoc, decorEngine.activeColorSpace.id)
+        GLES30.glUniform1f(uGammaLoc, gamma)
+        GLES30.glUniform1f(uContrastLoc, contrast)
+
+        // 1.0f scale fills the 12MP FBO completely
+        GLES30.glUniform2f(uScaleLoc, 1.0f, 1.0f)
+
+        GLES30.glBindVertexArray(vaoId)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        GLES30.glBindVertexArray(0)
+
+        // Read pixels
+        val pixelBuffer = ByteBuffer.allocateDirect(targetW * targetH * 4)
+            .order(ByteOrder.nativeOrder())
+        GLES30.glReadPixels(0, 0, targetW, targetH, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixelBuffer)
+
+        // Restore viewport and framebuffer
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(0, 0, surfaceWidth, surfaceHeight)
+        GLES30.glDeleteTextures(1, texs, 0)
+        GLES30.glDeleteFramebuffers(1, fbos, 0)
+
+        // Convert to Bitmap and invert vertically (glReadPixels is bottom-to-top)
+        val intBuffer = pixelBuffer.asIntBuffer()
+        val pixels = IntArray(targetW * targetH)
+        intBuffer.get(pixels)
+
+        val rowBuffer = IntArray(targetW)
+        for (y in 0 until targetH / 2) {
+            val top = y * targetW
+            val bottom = (targetH - 1 - y) * targetW
+            System.arraycopy(pixels, top, rowBuffer, 0, targetW)
+            System.arraycopy(pixels, bottom, pixels, top, targetW)
+            System.arraycopy(rowBuffer, 0, pixels, bottom, targetW)
+        }
+
+        val bitmap = Bitmap.createBitmap(pixels, targetW, targetH, Bitmap.Config.ARGB_8888)
+        callback(bitmap)
     }
 
     private fun setupShaders() {

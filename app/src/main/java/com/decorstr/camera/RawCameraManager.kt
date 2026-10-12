@@ -6,13 +6,16 @@ import android.graphics.ImageFormat
 import android.hardware.camera2.*
 import android.media.Image
 import android.media.ImageReader
+import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.util.Size
 import com.decorstr.engine.DecorrelationEngine
 import com.decorstr.gl.DecorstrRenderer
+import com.decorstr.storage.MediaSaver
 import java.nio.ByteBuffer
+import java.util.concurrent.Executors
 
 class RawCameraManager(
     private val context: Context,
@@ -33,6 +36,22 @@ class RawCameraManager(
 
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
+
+    // Storage and capture state
+    private val mediaSaver = MediaSaver(context)
+    private val captureExecutor = Executors.newSingleThreadExecutor()
+    @Volatile private var latestCaptureResult: TotalCaptureResult? = null
+    private var activeCharacteristics: CameraCharacteristics? = null
+
+    @Volatile private var isCaptureRequested = false
+    private var pendingCaptureCallback: ((Uri?, Uri?) -> Unit)? = null
+
+    fun captureStill(callback: (Uri?, Uri?) -> Unit) {
+        synchronized(this) {
+            pendingCaptureCallback = callback
+            isCaptureRequested = true
+        }
+    }
 
     // Available RAW camera IDs
     private val rawCameraIds = mutableListOf<String>()
@@ -120,6 +139,7 @@ class RawCameraManager(
         if (!isStarted) return
         try {
             val chars = cameraManager.getCameraCharacteristics(cameraId)
+            activeCharacteristics = chars
             inspectAndConfigureMetadata(chars)
 
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
@@ -237,7 +257,19 @@ class RawCameraManager(
                     override fun onConfigured(session: CameraCaptureSession) {
                         captureSession = session
                         try {
-                            session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
+                            session.setRepeatingRequest(
+                                requestBuilder.build(),
+                                object : CameraCaptureSession.CaptureCallback() {
+                                    override fun onCaptureCompleted(
+                                        session: CameraCaptureSession,
+                                        request: CaptureRequest,
+                                        result: TotalCaptureResult
+                                    ) {
+                                        latestCaptureResult = result
+                                    }
+                                },
+                                backgroundHandler
+                            )
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to start repeating request", e)
                         }
@@ -259,6 +291,17 @@ class RawCameraManager(
             reader.acquireLatestImage() ?: return
         } catch (e: Exception) {
             return
+        }
+
+        var shouldCapture = false
+        var onCaptured: ((Uri?, Uri?) -> Unit)? = null
+        synchronized(this) {
+            if (isCaptureRequested) {
+                shouldCapture = true
+                isCaptureRequested = false
+                onCaptured = pendingCaptureCallback
+                pendingCaptureCallback = null
+            }
         }
 
         try {
@@ -294,6 +337,37 @@ class RawCameraManager(
             buffer.rewind()
             renderer.queueRawFrame(buffer, image.width, image.height)
 
+            if (shouldCapture) {
+                val chars = activeCharacteristics
+                val capResult = latestCaptureResult
+                if (chars != null && capResult != null) {
+                    renderer.requestOffscreenCapture { stretchedBitmap ->
+                        captureExecutor.execute {
+                            try {
+                                val jpegUri = mediaSaver.saveDecorrelatedJpeg(
+                                    stretchedBitmap,
+                                    decorEngine.activeColorSpace.name
+                                )
+                                val dngUri = mediaSaver.saveRawDng(
+                                    image,
+                                    chars,
+                                    capResult,
+                                    renderer.cameraRotation
+                                )
+                                stretchedBitmap.recycle()
+                                onCaptured?.invoke(jpegUri, dngUri)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error executing capture", e)
+                                onCaptured?.invoke(null, null)
+                            } finally {
+                                image.close()
+                            }
+                        }
+                    }
+                    return // Keep image open until DNG is written
+                }
+            }
+
             frameCount++
             val now = System.currentTimeMillis()
             if (now - lastFpsTimestamp >= 1000) {
@@ -303,7 +377,9 @@ class RawCameraManager(
                 onFrameProcessed?.invoke(fps)
             }
         } finally {
-            image.close()
+            if (!shouldCapture) {
+                image.close()
+            }
         }
     }
 

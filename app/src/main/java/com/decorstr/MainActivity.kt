@@ -180,9 +180,22 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Aspect: $mode", Toast.LENGTH_SHORT).show()
         }
 
-        // Capture still image
+        // Capture still image (Full-resolution Decorrelated JPEG + RAW DNG)
         btnCapture.setOnClickListener {
-            Toast.makeText(this, "Capturing decorrelated RAW snapshot...", Toast.LENGTH_SHORT).show()
+            btnCapture.isEnabled = false
+            Toast.makeText(this, "Capturing 12MP Photo + RAW DNG...", Toast.LENGTH_SHORT).show()
+            cameraManager.captureStill { jpegUri, dngUri ->
+                runOnUiThread {
+                    btnCapture.isEnabled = true
+                    if (jpegUri != null && dngUri != null) {
+                        Toast.makeText(this, "Saved Photo & DNG to Pictures/Decorstr!", Toast.LENGTH_LONG).show()
+                    } else if (jpegUri != null) {
+                        Toast.makeText(this, "Saved Photo to Pictures/Decorstr!", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(this, "Capture failed, try again", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
     }
 
