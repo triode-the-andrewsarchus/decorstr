@@ -3,6 +3,7 @@ package com.decorstr.gl
 import android.content.Context
 import android.opengl.GLSurfaceView
 import android.util.AttributeSet
+import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 
@@ -13,10 +14,23 @@ class DecorstrGLSurfaceView @JvmOverloads constructor(
 
     var onFocusTap: ((x: Float, y: Float) -> Unit)? = null
     var onZoomScale: ((scaleFactor: Float) -> Unit)? = null
+    var onToggleAspect: (() -> Unit)? = null
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
             onZoomScale?.invoke(detector.scaleFactor)
+            return true
+        }
+    })
+
+    private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            onToggleAspect?.invoke()
+            return true
+        }
+
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            onFocusTap?.invoke(e.x, e.y)
             return true
         }
     })
@@ -29,9 +43,7 @@ class DecorstrGLSurfaceView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         scaleDetector.onTouchEvent(event)
-        if (!scaleDetector.isInProgress && event.action == MotionEvent.ACTION_UP) {
-            onFocusTap?.invoke(event.x, event.y)
-        }
+        gestureDetector.onTouchEvent(event)
         return true
     }
 }

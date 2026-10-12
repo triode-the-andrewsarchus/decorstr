@@ -18,14 +18,6 @@ class DecorstrRenderer(
 
     companion object {
         private const val TAG = "DecorstrRenderer"
-
-        // Fullscreen quad vertices [x, y, u, v]
-        private val QUAD_VERTICES = floatArrayOf(
-            -1.0f, -1.0f,        0.0f, 1.0f,
-             1.0f, -1.0f,        1.0f, 1.0f,
-            -1.0f,  1.0f,        0.0f, 0.0f,
-             1.0f,  1.0f,        1.0f, 0.0f
-        )
     }
 
     private var programId = 0
@@ -44,6 +36,7 @@ class DecorstrRenderer(
     private var uColorSpaceLoc = -1
     private var uGammaLoc = -1
     private var uContrastLoc = -1
+    private var uScaleLoc = -1
 
     // Frame configuration
     var cfaPattern: Int = 0 // 0=RGGB
@@ -51,6 +44,15 @@ class DecorstrRenderer(
     var whiteLevel: Float = 1023f
     var gamma: Float = 2.2f
     var contrast: Float = 1.0f
+
+    // Camera orientation & Aspect ratio configuration
+    var cameraRotation: Int = 90
+    var isFrontCamera: Boolean = false
+    var isAspectFill: Boolean = false
+    private var isGeometryDirty: Boolean = true
+    private val vertexBuffer: FloatBuffer = ByteBuffer.allocateDirect(16 * 4)
+        .order(ByteOrder.nativeOrder())
+        .asFloatBuffer()
 
     private var surfaceWidth = 0
     private var surfaceHeight = 0
@@ -69,6 +71,20 @@ class DecorstrRenderer(
             frameHeight = height
             isNewFrameAvailable = true
         }
+    }
+
+    fun setOrientation(rotation: Int, isFront: Boolean) {
+        synchronized(frameLock) {
+            if (cameraRotation != rotation || isFrontCamera != isFront) {
+                cameraRotation = rotation
+                isFrontCamera = isFront
+                isGeometryDirty = true
+            }
+        }
+    }
+
+    fun toggleAspect() {
+        isAspectFill = !isAspectFill
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -122,6 +138,11 @@ class DecorstrRenderer(
             return
         }
 
+        if (isGeometryDirty && vboId != 0) {
+            updateQuadVbo()
+            isGeometryDirty = false
+        }
+
         GLES30.glUseProgram(programId)
 
         // Bind texture unit 0
@@ -140,6 +161,40 @@ class DecorstrRenderer(
         GLES30.glUniform1i(uColorSpaceLoc, decorEngine.activeColorSpace.id)
         GLES30.glUniform1f(uGammaLoc, gamma)
         GLES30.glUniform1f(uContrastLoc, contrast)
+
+        // Calculate aspect scale to completely eliminate squishing
+        val isRotated = (cameraRotation == 90 || cameraRotation == 270)
+        val camW = if (isRotated) height.toFloat() else width.toFloat()
+        val camH = if (isRotated) width.toFloat() else height.toFloat()
+
+        var scaleX = 1.0f
+        var scaleY = 1.0f
+
+        if (surfaceWidth > 0 && surfaceHeight > 0 && camW > 0 && camH > 0) {
+            val camAspect = camW / camH
+            val surfaceAspect = surfaceWidth.toFloat() / surfaceHeight.toFloat()
+
+            if (isAspectFill) {
+                if (camAspect > surfaceAspect) {
+                    scaleX = camAspect / surfaceAspect
+                    scaleY = 1.0f
+                } else {
+                    scaleX = 1.0f
+                    scaleY = surfaceAspect / camAspect
+                }
+            } else {
+                // Aspect Fit (Letterbox)
+                if (camAspect > surfaceAspect) {
+                    scaleX = 1.0f
+                    scaleY = surfaceAspect / camAspect
+                } else {
+                    scaleX = camAspect / surfaceAspect
+                    scaleY = 1.0f
+                }
+            }
+        }
+
+        GLES30.glUniform2f(uScaleLoc, scaleX, scaleY)
 
         // Draw quad
         GLES30.glBindVertexArray(vaoId)
@@ -184,6 +239,7 @@ class DecorstrRenderer(
             uColorSpaceLoc = GLES30.glGetUniformLocation(programId, "u_ColorSpace")
             uGammaLoc = GLES30.glGetUniformLocation(programId, "u_Gamma")
             uContrastLoc = GLES30.glGetUniformLocation(programId, "u_Contrast")
+            uScaleLoc = GLES30.glGetUniformLocation(programId, "u_Scale")
             Log.i(TAG, "Shaders linked successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Error setting up shaders", e)
@@ -200,13 +256,8 @@ class DecorstrRenderer(
         GLES30.glGenBuffers(1, vbos, 0)
         vboId = vbos[0]
 
-        val buffer: FloatBuffer = ByteBuffer.allocateDirect(QUAD_VERTICES.size * 4)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        buffer.put(QUAD_VERTICES).position(0)
-
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vboId)
-        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, QUAD_VERTICES.size * 4, buffer, GLES30.GL_STATIC_DRAW)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, 16 * 4, null, GLES30.GL_DYNAMIC_DRAW)
 
         GLES30.glEnableVertexAttribArray(0)
         GLES30.glVertexAttribPointer(0, 2, GLES30.GL_FLOAT, false, 4 * 4, 0)
@@ -215,6 +266,63 @@ class DecorstrRenderer(
         GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, 4 * 4, 2 * 4)
 
         GLES30.glBindVertexArray(0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+
+        updateQuadVbo()
+        isGeometryDirty = false
+    }
+
+    private fun updateQuadVbo() {
+        val uvs = when (cameraRotation) {
+            90 -> floatArrayOf(
+                1f, 1f, // BL
+                1f, 0f, // BR
+                0f, 1f, // TL
+                0f, 0f  // TR
+            )
+            180 -> floatArrayOf(
+                1f, 0f, // BL
+                0f, 0f, // BR
+                1f, 1f, // TL
+                0f, 1f  // TR
+            )
+            270 -> floatArrayOf(
+                0f, 0f, // BL
+                0f, 1f, // BR
+                1f, 0f, // TL
+                1f, 1f  // TR
+            )
+            else -> floatArrayOf(
+                0f, 1f, // BL
+                1f, 1f, // BR
+                0f, 0f, // TL
+                1f, 0f  // TR
+            )
+        }
+
+        // If front camera, mirror horizontally
+        if (isFrontCamera) {
+            val tempU0 = uvs[0]; val tempV0 = uvs[1]
+            uvs[0] = uvs[2]; uvs[1] = uvs[3]
+            uvs[2] = tempU0; uvs[3] = tempV0
+
+            val tempU2 = uvs[4]; val tempV2 = uvs[5]
+            uvs[4] = uvs[6]; uvs[5] = uvs[7]
+            uvs[6] = tempU2; uvs[7] = tempV2
+        }
+
+        val vertices = floatArrayOf(
+            -1.0f, -1.0f, uvs[0], uvs[1],
+             1.0f, -1.0f, uvs[2], uvs[3],
+            -1.0f,  1.0f, uvs[4], uvs[5],
+             1.0f,  1.0f, uvs[6], uvs[7]
+        )
+
+        vertexBuffer.clear()
+        vertexBuffer.put(vertices).position(0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vboId)
+        GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, vertices.size * 4, vertexBuffer)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
     }
 

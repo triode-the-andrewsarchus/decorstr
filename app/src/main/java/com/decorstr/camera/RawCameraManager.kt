@@ -200,7 +200,12 @@ class RawCameraManager(
         activeWhiteLevel = (chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 4095).toFloat()
         renderer.whiteLevel = activeWhiteLevel
 
-        Log.i(TAG, "Configured CFA: $activeCfaPattern, BlackLevel: ${activeBlackLevels.contentToString()}, WhiteLevel: $activeWhiteLevel")
+        val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+        val lensFacing = chars.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
+        val isFront = (lensFacing == CameraCharacteristics.LENS_FACING_FRONT)
+        renderer.setOrientation(sensorOrientation, isFront)
+
+        Log.i(TAG, "Configured CFA: $activeCfaPattern, BlackLevel: ${activeBlackLevels.contentToString()}, WhiteLevel: $activeWhiteLevel, Orientation: $sensorOrientation, isFront: $isFront")
     }
 
     private fun createCaptureSession() {

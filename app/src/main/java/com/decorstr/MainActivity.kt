@@ -34,6 +34,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var seekIntensity: SeekBar
     private lateinit var btnLockMatrix: MaterialButton
     private lateinit var btnSwitchCam: Button
+    private lateinit var btnAspect: Button
     private lateinit var btnCapture: MaterialButton
     private lateinit var chipGroupPresets: ChipGroup
 
@@ -73,6 +74,7 @@ class MainActivity : AppCompatActivity() {
         seekIntensity = findViewById(R.id.seekIntensity)
         btnLockMatrix = findViewById(R.id.btnLockMatrix)
         btnSwitchCam = findViewById(R.id.btnSwitchCam)
+        btnAspect = findViewById(R.id.btnAspect)
         btnCapture = findViewById(R.id.btnCapture)
         chipGroupPresets = findViewById(R.id.chipGroupPresets)
 
@@ -80,6 +82,16 @@ class MainActivity : AppCompatActivity() {
         decorEngine = DecorrelationEngine()
         renderer = DecorstrRenderer(this, decorEngine)
         glSurfaceView.setRenderer(renderer)
+
+        // Double tap preview surface toggles Fit/Fill
+        glSurfaceView.onToggleAspect = {
+            runOnUiThread {
+                renderer.toggleAspect()
+                btnAspect.text = if (renderer.isAspectFill) "FILL" else "FIT"
+                val mode = if (renderer.isAspectFill) "Fill (Crop)" else "Fit (Letterbox)"
+                Toast.makeText(this, "Aspect: $mode", Toast.LENGTH_SHORT).show()
+            }
+        }
 
         // Initialize camera manager
         cameraManager = RawCameraManager(this, renderer, decorEngine) { fps ->
@@ -158,6 +170,14 @@ class MainActivity : AppCompatActivity() {
         // Switch Camera
         btnSwitchCam.setOnClickListener {
             cameraManager.switchCamera()
+        }
+
+        // Toggle Aspect Fit / Fill
+        btnAspect.setOnClickListener {
+            renderer.toggleAspect()
+            btnAspect.text = if (renderer.isAspectFill) "FILL" else "FIT"
+            val mode = if (renderer.isAspectFill) "Fill (Crop)" else "Fit (Letterbox)"
+            Toast.makeText(this, "Aspect: $mode", Toast.LENGTH_SHORT).show()
         }
 
         // Capture still image

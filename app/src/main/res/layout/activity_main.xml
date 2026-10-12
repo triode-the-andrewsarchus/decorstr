@@ -24,9 +24,9 @@
 
         <TextView
             android:id="@+id/tvTitle"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
+            android:layout_marginEnd="8dp"
             android:text="Decorstr"
             android:textColor="@color/accent_gold"
             android:textSize="18sp"
@@ -34,12 +34,25 @@
 
         <TextView
             android:id="@+id/tvStatus"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="12dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="8dp"
+            android:gravity="center_vertical|end"
+            android:maxLines="1"
             android:text="Initializing..."
             android:textColor="@color/white"
-            android:textSize="12sp" />
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnAspect"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginEnd="6dp"
+            android:text="FIT"
+            android:textSize="11sp"
+            android:textColor="@color/white"
+            android:backgroundTint="#444444" />
 
         <Button
             android:id="@+id/btnSwitchCam"
