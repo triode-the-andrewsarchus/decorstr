@@ -89,13 +89,100 @@ Vec3 yuvToLinearRgb(const Vec3& yuv) {
     return {r, g, b};
 }
 
+Vec3 linearRgbToYrd(const Vec3& rgb) {
+    Vec3 yuv = linearRgbToYuv(rgb);
+    float y = yuv.x;
+    float u = (yuv.y - 0.5f) * 0.5f + 0.5f;
+    float v = (yuv.z - 0.5f) * 2.0f + 0.5f;
+    return {y, u, v};
+}
+
+Vec3 yrdToLinearRgb(const Vec3& c) {
+    float y = c.x;
+    float u = (c.y - 0.5f) * 2.0f + 0.5f;
+    float v = (c.z - 0.5f) * 0.5f + 0.5f;
+    return yuvToLinearRgb({y, u, v});
+}
+
+Vec3 linearRgbToYre(const Vec3& rgb) {
+    Vec3 yuv = linearRgbToYuv(rgb);
+    float y = yuv.x;
+    float u = (yuv.y - 0.5f) * 0.35f + 0.5f;
+    float v = (yuv.z - 0.5f) * 4.0f + 0.5f;
+    return {y, u, v};
+}
+
+Vec3 yreToLinearRgb(const Vec3& c) {
+    float y = c.x;
+    float u = (c.y - 0.5f) / 0.35f + 0.5f;
+    float v = (c.z - 0.5f) / 4.0f + 0.5f;
+    return yuvToLinearRgb({y, u, v});
+}
+
+Vec3 linearRgbToYye(const Vec3& rgb) {
+    Vec3 yuv = linearRgbToYuv(rgb);
+    float y = yuv.x;
+    // Invert and boost U (since yellow = -U = Y - B)
+    float u_yellow = -(yuv.y - 0.5f) * 2.5f + 0.5f;
+    float v_rg = (yuv.z - 0.5f) * 0.8f + 0.5f;
+    return {y, u_yellow, v_rg};
+}
+
+Vec3 yyeToLinearRgb(const Vec3& c) {
+    float y = c.x;
+    float u = -(c.y - 0.5f) / 2.5f + 0.5f;
+    float v = (c.z - 0.5f) / 0.8f + 0.5f;
+    return yuvToLinearRgb({y, u, v});
+}
+
+Vec3 linearRgbToYbk(const Vec3& rgb) {
+    Vec3 yuv = linearRgbToYuv(rgb);
+    float y = (yuv.x - 0.5f) * 2.2f + 0.5f;
+    float u = (yuv.y - 0.5f) * 0.5f + 0.5f;
+    float v = (yuv.z - 0.5f) * 0.5f + 0.5f;
+    return {y, u, v};
+}
+
+Vec3 ybkToLinearRgb(const Vec3& c) {
+    float y = (c.x - 0.5f) / 2.2f + 0.5f;
+    float u = (c.y - 0.5f) / 0.5f + 0.5f;
+    float v = (c.z - 0.5f) / 0.5f + 0.5f;
+    return yuvToLinearRgb({y, u, v});
+}
+
+Vec3 linearRgbToYwe(const Vec3& rgb) {
+    Vec3 yuv = linearRgbToYuv(rgb);
+    float y = (yuv.x - 0.5f) * 2.5f + 0.5f;
+    float u = (yuv.y - 0.5f) * 0.7f + 0.5f;
+    float v = (yuv.z - 0.5f) * 0.7f + 0.5f;
+    return {y, u, v};
+}
+
+Vec3 yweToLinearRgb(const Vec3& c) {
+    float y = (c.x - 0.5f) / 2.5f + 0.5f;
+    float u = (c.y - 0.5f) / 0.7f + 0.5f;
+    float v = (c.z - 0.5f) / 0.7f + 0.5f;
+    return yuvToLinearRgb({y, u, v});
+}
+
 Vec3 convertRgbToSpace(const Vec3& rgb, ColorSpaceMode mode) {
     switch (mode) {
         case ColorSpaceMode::LAB:
             return linearRgbToCieLab(rgb);
-        case ColorSpaceMode::YUV:
+        case ColorSpaceMode::YDT:
             return linearRgbToYuv(rgb);
-        case ColorSpaceMode::RGB:
+        case ColorSpaceMode::YRD:
+            return linearRgbToYrd(rgb);
+        case ColorSpaceMode::YRE:
+            return linearRgbToYre(rgb);
+        case ColorSpaceMode::YYE:
+            return linearRgbToYye(rgb);
+        case ColorSpaceMode::YBK:
+            return linearRgbToYbk(rgb);
+        case ColorSpaceMode::YWE:
+            return linearRgbToYwe(rgb);
+        case ColorSpaceMode::CRGB:
+        case ColorSpaceMode::RGB0:
         case ColorSpaceMode::DIRECT_PCA:
         case ColorSpaceMode::RAW_NORMAL:
         default:
@@ -107,9 +194,20 @@ Vec3 convertSpaceToRgb(const Vec3& c, ColorSpaceMode mode) {
     switch (mode) {
         case ColorSpaceMode::LAB:
             return cieLabToLinearRgb(c);
-        case ColorSpaceMode::YUV:
+        case ColorSpaceMode::YDT:
             return yuvToLinearRgb(c);
-        case ColorSpaceMode::RGB:
+        case ColorSpaceMode::YRD:
+            return yrdToLinearRgb(c);
+        case ColorSpaceMode::YRE:
+            return yreToLinearRgb(c);
+        case ColorSpaceMode::YYE:
+            return yyeToLinearRgb(c);
+        case ColorSpaceMode::YBK:
+            return ybkToLinearRgb(c);
+        case ColorSpaceMode::YWE:
+            return yweToLinearRgb(c);
+        case ColorSpaceMode::CRGB:
+        case ColorSpaceMode::RGB0:
         case ColorSpaceMode::DIRECT_PCA:
         case ColorSpaceMode::RAW_NORMAL:
         default:

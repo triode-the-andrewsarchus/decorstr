@@ -185,12 +185,16 @@ class DecorrelationEngine {
         }
 
         // Bias calculation: b = mu_target - W * mu_smooth
-        val targetMean = floatArrayOf(0.5f, 0.5f, 0.5f)
-        for (i in 0..2) {
-            val wMu = currentMatrix[i * 3 + 0] * smoothMean[0] +
-                      currentMatrix[i * 3 + 1] * smoothMean[1] +
-                      currentMatrix[i * 3 + 2] * smoothMean[2]
-            currentBias[i] = targetMean[i] - wMu
+        if (colorSpace == ColorSpace.RGB0) {
+            currentBias.fill(0f)
+        } else {
+            val targetMean = floatArrayOf(0.5f, 0.5f, 0.5f)
+            for (i in 0..2) {
+                val wMu = currentMatrix[i * 3 + 0] * smoothMean[0] +
+                          currentMatrix[i * 3 + 1] * smoothMean[1] +
+                          currentMatrix[i * 3 + 2] * smoothMean[2]
+                currentBias[i] = targetMean[i] - wMu
+            }
         }
     }
 

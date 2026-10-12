@@ -162,23 +162,25 @@ class MainActivity : AppCompatActivity() {
         chipGroupPresets.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
             renderer.resetAccumulation()
-            when (checkedIds[0]) {
-                R.id.chipLab -> {
-                    decorEngine.activeColorSpace = ColorSpace.LAB
-                    decorEngine.reset()
-                }
-                R.id.chipRgb -> {
-                    decorEngine.activeColorSpace = ColorSpace.RGB_ZCA
-                    decorEngine.reset()
-                }
-                R.id.chipPca -> {
-                    decorEngine.activeColorSpace = ColorSpace.DIRECT_PCA
-                    decorEngine.reset()
-                }
-                R.id.chipNormal -> {
-                    decorEngine.activeColorSpace = ColorSpace.RAW_NORMAL
-                }
+            val preset = when (checkedIds[0]) {
+                R.id.chipLab -> ColorSpace.LAB
+                R.id.chipCrgb -> ColorSpace.CRGB
+                R.id.chipYrd -> ColorSpace.YRD
+                R.id.chipYre -> ColorSpace.YRE
+                R.id.chipYye -> ColorSpace.YYE
+                R.id.chipYbk -> ColorSpace.YBK
+                R.id.chipYwe -> ColorSpace.YWE
+                R.id.chipYdt -> ColorSpace.YDT
+                R.id.chipRgb0 -> ColorSpace.RGB0
+                R.id.chipPca -> ColorSpace.DIRECT_PCA
+                R.id.chipNormal -> ColorSpace.RAW_NORMAL
+                else -> ColorSpace.LAB
             }
+            decorEngine.activeColorSpace = preset
+            if (preset != ColorSpace.RAW_NORMAL) {
+                decorEngine.reset()
+            }
+            Toast.makeText(this, preset.displayName, Toast.LENGTH_SHORT).show()
         }
 
         // Temporal Smoothing Slider (1 to 100 -> 0.01 to 1.0)

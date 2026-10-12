@@ -7,8 +7,15 @@
     <string name="btn_unlock">Unlock Matrix</string>
     <string name="btn_switch_camera">CAM ▾</string>
     <string name="btn_capture">Capture</string>
-    <string name="preset_lab">Decorstr LAB</string>
-    <string name="preset_rgb">Decorstr RGB (ZCA)</string>
-    <string name="preset_pca">Direct PCA</string>
-    <string name="preset_normal">Normal RAW</string>
+    <string name="preset_lab">LAB</string>
+    <string name="preset_crgb">CRGB</string>
+    <string name="preset_yrd">YRD</string>
+    <string name="preset_yre">YRE</string>
+    <string name="preset_yye">YYE</string>
+    <string name="preset_ybk">YBK</string>
+    <string name="preset_ywe">YWE</string>
+    <string name="preset_ydt">YDT</string>
+    <string name="preset_rgb0">RGB0</string>
+    <string name="preset_pca">PCA</string>
+    <string name="preset_normal">RAW</string>
 </resources>

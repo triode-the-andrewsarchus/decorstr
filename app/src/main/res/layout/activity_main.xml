@@ -106,11 +106,74 @@
                 app:chipBackgroundColor="@color/dark_gray" />
 
             <com.google.android.material.chip.Chip
-                android:id="@+id/chipRgb"
+                android:id="@+id/chipCrgb"
                 style="@style/Widget.MaterialComponents.Chip.Choice"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/preset_rgb"
+                android:text="@string/preset_crgb"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipYrd"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_yrd"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipYre"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_yre"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipYye"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_yye"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipYbk"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_ybk"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipYwe"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_ywe"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipYdt"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_ydt"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipRgb0"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_rgb0"
                 android:textColor="@color/white"
                 app:chipBackgroundColor="@color/dark_gray" />
 

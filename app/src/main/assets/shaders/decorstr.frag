@@ -145,6 +145,56 @@ vec3 yuvToRgb(vec3 yuv) {
     return vec3(r, g, b);
 }
 
+vec3 rgbToYrd(vec3 rgb) {
+    vec3 yuv = rgbToYuv(rgb);
+    return vec3(yuv.x, (yuv.y - 0.5) * 0.5 + 0.5, (yuv.z - 0.5) * 2.0 + 0.5);
+}
+
+vec3 yrdToRgb(vec3 c) {
+    vec3 yuv = vec3(c.x, (c.y - 0.5) * 2.0 + 0.5, (c.z - 0.5) * 0.5 + 0.5);
+    return yuvToRgb(yuv);
+}
+
+vec3 rgbToYre(vec3 rgb) {
+    vec3 yuv = rgbToYuv(rgb);
+    return vec3(yuv.x, (yuv.y - 0.5) * 0.35 + 0.5, (yuv.z - 0.5) * 4.0 + 0.5);
+}
+
+vec3 yreToRgb(vec3 c) {
+    vec3 yuv = vec3(c.x, (c.y - 0.5) / 0.35 + 0.5, (c.z - 0.5) / 4.0 + 0.5);
+    return yuvToRgb(yuv);
+}
+
+vec3 rgbToYye(vec3 rgb) {
+    vec3 yuv = rgbToYuv(rgb);
+    return vec3(yuv.x, -(yuv.y - 0.5) * 2.5 + 0.5, (yuv.z - 0.5) * 0.8 + 0.5);
+}
+
+vec3 yyeToRgb(vec3 c) {
+    vec3 yuv = vec3(c.x, -(c.y - 0.5) / 2.5 + 0.5, (c.z - 0.5) / 0.8 + 0.5);
+    return yuvToRgb(yuv);
+}
+
+vec3 rgbToYbk(vec3 rgb) {
+    vec3 yuv = rgbToYuv(rgb);
+    return vec3((yuv.x - 0.5) * 2.2 + 0.5, (yuv.y - 0.5) * 0.5 + 0.5, (yuv.z - 0.5) * 0.5 + 0.5);
+}
+
+vec3 ybkToRgb(vec3 c) {
+    vec3 yuv = vec3((c.x - 0.5) / 2.2 + 0.5, (c.y - 0.5) / 0.5 + 0.5, (c.z - 0.5) / 0.5 + 0.5);
+    return yuvToRgb(yuv);
+}
+
+vec3 rgbToYwe(vec3 rgb) {
+    vec3 yuv = rgbToYuv(rgb);
+    return vec3((yuv.x - 0.5) * 2.5 + 0.5, (yuv.y - 0.5) * 0.7 + 0.5, (yuv.z - 0.5) * 0.7 + 0.5);
+}
+
+vec3 yweToRgb(vec3 c) {
+    vec3 yuv = vec3((c.x - 0.5) / 2.5 + 0.5, (c.y - 0.5) / 0.7 + 0.5, (c.z - 0.5) / 0.7 + 0.5);
+    return yuvToRgb(yuv);
+}
+
 void main() {
     if (u_TextureSize.x <= 1.0 || u_TextureSize.y <= 1.0) {
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -166,6 +216,16 @@ void main() {
         colorSpaceCoord = rgbToLab(linearRgb);
     } else if (u_ColorSpace == 2) {
         colorSpaceCoord = rgbToYuv(linearRgb);
+    } else if (u_ColorSpace == 5) {
+        colorSpaceCoord = rgbToYrd(linearRgb);
+    } else if (u_ColorSpace == 6) {
+        colorSpaceCoord = rgbToYre(linearRgb);
+    } else if (u_ColorSpace == 7) {
+        colorSpaceCoord = rgbToYye(linearRgb);
+    } else if (u_ColorSpace == 8) {
+        colorSpaceCoord = rgbToYbk(linearRgb);
+    } else if (u_ColorSpace == 9) {
+        colorSpaceCoord = rgbToYwe(linearRgb);
     }
 
     // Apply affine decorrelation stretch: y = W * x + b
@@ -176,9 +236,24 @@ void main() {
         displayLinear = labToRgb(stretched);
     } else if (u_ColorSpace == 2) {
         displayLinear = yuvToRgb(stretched);
+    } else if (u_ColorSpace == 5) {
+        displayLinear = yrdToRgb(stretched);
+    } else if (u_ColorSpace == 6) {
+        displayLinear = yreToRgb(stretched);
+    } else if (u_ColorSpace == 7) {
+        displayLinear = yyeToRgb(stretched);
+    } else if (u_ColorSpace == 8) {
+        displayLinear = ybkToRgb(stretched);
+    } else if (u_ColorSpace == 9) {
+        displayLinear = yweToRgb(stretched);
     }
 
-    displayLinear = (displayLinear - 0.5) * u_Contrast + 0.5;
+    if (u_ColorSpace == 10) {
+        displayLinear = displayLinear * u_Contrast;
+    } else {
+        displayLinear = (displayLinear - 0.5) * u_Contrast + 0.5;
+    }
+
     float invGamma = 1.0 / max(0.1, u_Gamma);
     vec3 outRgb = pow(clamp(displayLinear, 0.0, 1.0), vec3(invGamma));
     fragColor = vec4(outRgb, 1.0);

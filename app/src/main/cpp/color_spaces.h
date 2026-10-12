@@ -6,11 +6,17 @@
 namespace decorstr {
 
 enum class ColorSpaceMode {
-    RGB = 0,
+    CRGB = 0,
     LAB = 1,
-    YUV = 2,
+    YDT = 2,
     DIRECT_PCA = 3,
-    RAW_NORMAL = 4
+    RAW_NORMAL = 4,
+    YRD = 5,
+    YRE = 6,
+    YYE = 7,
+    YBK = 8,
+    YWE = 9,
+    RGB0 = 10
 };
 
 struct Vec3 {
@@ -30,6 +36,21 @@ Vec3 cieLabToLinearRgb(const Vec3& lab);
 
 Vec3 linearRgbToYuv(const Vec3& rgb);
 Vec3 yuvToLinearRgb(const Vec3& yuv);
+
+Vec3 linearRgbToYrd(const Vec3& rgb);
+Vec3 yrdToLinearRgb(const Vec3& c);
+
+Vec3 linearRgbToYre(const Vec3& rgb);
+Vec3 yreToLinearRgb(const Vec3& c);
+
+Vec3 linearRgbToYye(const Vec3& rgb);
+Vec3 yyeToLinearRgb(const Vec3& c);
+
+Vec3 linearRgbToYbk(const Vec3& rgb);
+Vec3 ybkToLinearRgb(const Vec3& c);
+
+Vec3 linearRgbToYwe(const Vec3& rgb);
+Vec3 yweToLinearRgb(const Vec3& c);
 
 Vec3 convertRgbToSpace(const Vec3& rgb, ColorSpaceMode mode);
 Vec3 convertSpaceToRgb(const Vec3& c, ColorSpaceMode mode);

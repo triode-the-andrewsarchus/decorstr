@@ -94,14 +94,21 @@ WhiteningResult WhiteningEngine::updateAndCompute(
     }
 
     // 5. Target Mean and Bias calculation: b = mu_target - W * mu_smooth
-    float defaultTarget[3] = {0.5f, 0.5f, 0.5f};
-    const float* target = (targetMean != nullptr) ? targetMean : defaultTarget;
+    if (mode == ColorSpaceMode::RGB0) {
+        // RGB0: Zero mean / zero bias -> preserves deep blacks and shadows
+        res.bias[0] = 0.0f;
+        res.bias[1] = 0.0f;
+        res.bias[2] = 0.0f;
+    } else {
+        float defaultTarget[3] = {0.5f, 0.5f, 0.5f};
+        const float* target = (targetMean != nullptr) ? targetMean : defaultTarget;
 
-    for (int i = 0; i < 3; ++i) {
-        float wMu = res.matrix[i * 3 + 0] * mSmoothMean[0]
-                  + res.matrix[i * 3 + 1] * mSmoothMean[1]
-                  + res.matrix[i * 3 + 2] * mSmoothMean[2];
-        res.bias[i] = target[i] - wMu;
+        for (int i = 0; i < 3; ++i) {
+            float wMu = res.matrix[i * 3 + 0] * mSmoothMean[0]
+                      + res.matrix[i * 3 + 1] * mSmoothMean[1]
+                      + res.matrix[i * 3 + 2] * mSmoothMean[2];
+            res.bias[i] = target[i] - wMu;
+        }
     }
 
     res.valid = true;
