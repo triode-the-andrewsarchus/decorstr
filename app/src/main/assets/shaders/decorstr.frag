@@ -16,109 +16,83 @@ uniform int u_ColorSpace; // 0=RGB, 1=LAB, 2=YUV, 3=DIRECT_PCA, 4=RAW_NORMAL
 uniform float u_Gamma;
 uniform float u_Contrast;
 
-float sampleCalibrated(ivec2 p) {
-    p = clamp(p, ivec2(0, 0), ivec2(u_TextureSize) - ivec2(1, 1));
+#define LAB_DELTA_CB 0.00885645167
+#define LAB_INV_3_DELTA_SQ 7.787037037
+#define LAB_16_DIV_116 0.13793103448
+#define XN 0.95047
+#define YN 1.00000
+#define ZN 1.08883
+
+float getCalibratedVal(ivec2 p, float bl) {
     uint rawUint = texelFetch(u_RawTexture, p, 0).r;
     float rawVal = float(rawUint);
-    int cfaIdx = (p.y % 2) * 2 + (p.x % 2);
-    float bl = (cfaIdx == 0) ? u_BlackLevel.x :
-               (cfaIdx == 1) ? u_BlackLevel.y :
-               (cfaIdx == 2) ? u_BlackLevel.z : u_BlackLevel.w;
     float normRange = max(1.0, u_WhiteLevel - bl);
     return clamp((rawVal - bl) / normRange, 0.0, 1.0);
 }
 
-// Bilinear demosaicing on Bayer grid
-vec3 demosaicBayer(ivec2 p, int pattern) {
-    int xMod = p.x % 2;
-    int yMod = p.y % 2;
-    int quadIdx = yMod * 2 + xMod; // 0=(0,0), 1=(1,0), 2=(0,1), 3=(1,1)
+// Fast 2x2 Bayer demosaic: 4 fetches per quad, completely branch-free and robust
+vec3 demosaicQuad(ivec2 p, int pattern) {
+    ivec2 maxCoord = ivec2(u_TextureSize) - ivec2(2, 2);
+    ivec2 q = clamp(p & (~1), ivec2(0, 0), maxCoord);
 
-    // Remap quadIdx to Bayer channel based on pattern:
-    // Pattern 0 (RGGB): 0=R, 1=Gr, 2=Gb, 3=B
-    // Pattern 1 (GRBG): 0=Gr, 1=R, 2=B, 3=Gb
-    // Pattern 2 (GBRG): 0=Gb, 1=B, 2=R, 3=Gr
-    // Pattern 3 (BGGR): 0=B, 1=Gb, 2=Gr, 3=R
-    int channel;
+    float p00 = getCalibratedVal(q, u_BlackLevel.x);
+    float p10 = getCalibratedVal(q + ivec2(1, 0), u_BlackLevel.y);
+    float p01 = getCalibratedVal(q + ivec2(0, 1), u_BlackLevel.z);
+    float p11 = getCalibratedVal(q + ivec2(1, 1), u_BlackLevel.w);
+
+    float r = 0.0;
+    float g = 0.0;
+    float b = 0.0;
+
     if (pattern == 0) {
-        channel = (quadIdx == 0) ? 0 : (quadIdx == 3) ? 2 : 1;
+        // RGGB
+        r = p00;
+        g = (p10 + p01) * 0.5;
+        b = p11;
     } else if (pattern == 1) {
-        channel = (quadIdx == 1) ? 0 : (quadIdx == 2) ? 2 : 1;
+        // GRBG
+        r = p10;
+        g = (p00 + p11) * 0.5;
+        b = p01;
     } else if (pattern == 2) {
-        channel = (quadIdx == 2) ? 0 : (quadIdx == 1) ? 2 : 1;
+        // GBRG
+        r = p01;
+        g = (p00 + p11) * 0.5;
+        b = p10;
     } else {
-        channel = (quadIdx == 3) ? 0 : (quadIdx == 0) ? 2 : 1;
-    }
-
-    float cCenter = sampleCalibrated(p);
-    float r = 0.0, g = 0.0, b = 0.0;
-
-    if (channel == 1) {
-        // Pixel is GREEN
-        g = cCenter;
-        float hAvg = (sampleCalibrated(p + ivec2(-1, 0)) + sampleCalibrated(p + ivec2(1, 0))) * 0.5;
-        float vAvg = (sampleCalibrated(p + ivec2(0, -1)) + sampleCalibrated(p + ivec2(0, 1))) * 0.5;
-
-        bool rIsHorizontal = (pattern == 0 && yMod == 0) || (pattern == 1 && yMod == 0) ||
-                             (pattern == 2 && yMod == 1) || (pattern == 3 && yMod == 1);
-        if (rIsHorizontal) {
-            r = hAvg;
-            b = vAvg;
-        } else {
-            r = vAvg;
-            b = hAvg;
-        }
-    } else if (channel == 0) {
-        // Pixel is RED
-        r = cCenter;
-        g = (sampleCalibrated(p + ivec2(-1, 0)) + sampleCalibrated(p + ivec2(1, 0)) +
-             sampleCalibrated(p + ivec2(0, -1)) + sampleCalibrated(p + ivec2(0, 1))) * 0.25;
-        b = (sampleCalibrated(p + ivec2(-1, -1)) + sampleCalibrated(p + ivec2(1, -1)) +
-             sampleCalibrated(p + ivec2(-1, 1))  + sampleCalibrated(p + ivec2(1, 1))) * 0.25;
-    } else {
-        // Pixel is BLUE
-        b = cCenter;
-        g = (sampleCalibrated(p + ivec2(-1, 0)) + sampleCalibrated(p + ivec2(1, 0)) +
-             sampleCalibrated(p + ivec2(0, -1)) + sampleCalibrated(p + ivec2(0, 1))) * 0.25;
-        r = (sampleCalibrated(p + ivec2(-1, -1)) + sampleCalibrated(p + ivec2(1, -1)) +
-             sampleCalibrated(p + ivec2(-1, 1))  + sampleCalibrated(p + ivec2(1, 1))) * 0.25;
+        // BGGR
+        r = p11;
+        g = (p10 + p01) * 0.5;
+        b = p00;
     }
 
     return vec3(r, g, b);
 }
 
-// CIELAB helpers
 float labF(float t) {
-    const float delta = 6.0 / 29.0;
-    const float delta3 = delta * delta * delta;
-    if (t > delta3) {
-        return pow(max(0.00001, t), 1.0 / 3.0);
+    if (t > LAB_DELTA_CB) {
+        return pow(max(0.00001, t), 0.333333333);
     } else {
-        return t / (3.0 * delta * delta) + 4.0 / 29.0;
+        return t * LAB_INV_3_DELTA_SQ + LAB_16_DIV_116;
     }
 }
 
 float labInvF(float t) {
-    const float delta = 6.0 / 29.0;
-    if (t > delta) {
+    if (t > 0.20689655) {
         return t * t * t;
     } else {
-        return 3.0 * delta * delta * (t - 4.0 / 29.0);
+        return (t - LAB_16_DIV_116) * 0.12841855;
     }
 }
 
 vec3 rgbToLab(vec3 rgb) {
-    const float Xn = 0.95047;
-    const float Yn = 1.00000;
-    const float Zn = 1.08883;
-
     float X = 0.4124564 * rgb.r + 0.3575761 * rgb.g + 0.1804375 * rgb.b;
     float Y = 0.2126729 * rgb.r + 0.7151522 * rgb.g + 0.0721750 * rgb.b;
     float Z = 0.0193339 * rgb.r + 0.1191920 * rgb.g + 0.9503041 * rgb.b;
 
-    float fx = labF(max(0.0, X / Xn));
-    float fy = labF(max(0.0, Y / Yn));
-    float fz = labF(max(0.0, Z / Zn));
+    float fx = labF(max(0.0, X / XN));
+    float fy = labF(max(0.0, Y / YN));
+    float fz = labF(max(0.0, Z / ZN));
 
     float L = 116.0 * fy - 16.0;
     float a = 500.0 * (fx - fy);
@@ -128,10 +102,6 @@ vec3 rgbToLab(vec3 rgb) {
 }
 
 vec3 labToRgb(vec3 lab) {
-    const float Xn = 0.95047;
-    const float Yn = 1.00000;
-    const float Zn = 1.08883;
-
     float L = lab.x * 100.0;
     float a = lab.y * 255.0 - 128.0;
     float b = lab.z * 255.0 - 128.0;
@@ -140,9 +110,9 @@ vec3 labToRgb(vec3 lab) {
     float fx = a / 500.0 + fy;
     float fz = fy - b / 200.0;
 
-    float X = Xn * labInvF(fx);
-    float Y = Yn * labInvF(fy);
-    float Z = Zn * labInvF(fz);
+    float X = XN * labInvF(fx);
+    float Y = YN * labInvF(fy);
+    float Z = ZN * labInvF(fz);
 
     float r =  3.2404542 * X - 1.5371385 * Y - 0.4985314 * Z;
     float g = -0.9692660 * X + 1.8760108 * Y + 0.0415560 * Z;
@@ -175,36 +145,34 @@ void main() {
     }
 
     ivec2 pixelCoord = ivec2(v_TexCoord * u_TextureSize);
-    vec3 linearRgb = demosaicBayer(pixelCoord, u_CfaPattern);
+    vec3 linearRgb = demosaicQuad(pixelCoord, u_CfaPattern);
 
     if (u_ColorSpace == 4) {
-        vec3 normalDisplay = pow(clamp(linearRgb, 0.0, 1.0), vec3(1.0 / max(0.1, u_Gamma)));
+        float invGamma = 1.0 / max(0.1, u_Gamma);
+        vec3 normalDisplay = pow(clamp(linearRgb, 0.0, 1.0), vec3(invGamma));
         fragColor = vec4(normalDisplay, 1.0);
         return;
     }
 
-    vec3 colorSpaceCoord;
+    vec3 colorSpaceCoord = linearRgb;
     if (u_ColorSpace == 1) {
         colorSpaceCoord = rgbToLab(linearRgb);
     } else if (u_ColorSpace == 2) {
         colorSpaceCoord = rgbToYuv(linearRgb);
-    } else {
-        colorSpaceCoord = linearRgb;
     }
 
     // Apply affine decorrelation stretch: y = W * x + b
     vec3 stretched = u_DecorrelationMatrix * colorSpaceCoord + u_DecorrelationBias;
 
-    vec3 displayLinear;
+    vec3 displayLinear = stretched;
     if (u_ColorSpace == 1) {
         displayLinear = labToRgb(stretched);
     } else if (u_ColorSpace == 2) {
         displayLinear = yuvToRgb(stretched);
-    } else {
-        displayLinear = stretched;
     }
 
     displayLinear = (displayLinear - 0.5) * u_Contrast + 0.5;
-    vec3 outRgb = pow(clamp(displayLinear, 0.0, 1.0), vec3(1.0 / max(0.1, u_Gamma)));
+    float invGamma = 1.0 / max(0.1, u_Gamma);
+    vec3 outRgb = pow(clamp(displayLinear, 0.0, 1.0), vec3(invGamma));
     fragColor = vec4(outRgb, 1.0);
 }
