@@ -202,6 +202,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         glSurfaceView.onResume()
+        btnCapture.isEnabled = true
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             cameraManager.start()
         } else {
@@ -213,5 +214,10 @@ class MainActivity : AppCompatActivity() {
         cameraManager.stop()
         glSurfaceView.onPause()
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        cameraManager.destroy()
+        super.onDestroy()
     }
 }

@@ -15,7 +15,9 @@ import com.decorstr.engine.DecorrelationEngine
 import com.decorstr.gl.DecorstrRenderer
 import com.decorstr.storage.MediaSaver
 import java.nio.ByteBuffer
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class RawCameraManager(
     private val context: Context,
@@ -46,6 +48,8 @@ class RawCameraManager(
     @Volatile private var isCaptureRequested = false
     private var pendingCaptureCallback: ((Uri?, Uri?) -> Unit)? = null
 
+    @Volatile private var inFlightCaptureLatch: CountDownLatch? = null
+
     fun captureStill(callback: (Uri?, Uri?) -> Unit) {
         synchronized(this) {
             pendingCaptureCallback = callback
@@ -58,7 +62,7 @@ class RawCameraManager(
     private var currentCameraIndex = 0
 
     // Lifecycle state
-    private var isStarted = false
+    @Volatile private var isStarted = false
 
     // Sensor metadata
     var selectedRawFormat = ImageFormat.RAW_SENSOR
@@ -73,6 +77,7 @@ class RawCameraManager(
 
     init {
         enumerateCameras()
+        startBackgroundThread()
     }
 
     private fun enumerateCameras() {
@@ -105,38 +110,54 @@ class RawCameraManager(
         }
     }
 
-    @Synchronized
     fun start() {
-        if (isStarted) return
-        isStarted = true
         startBackgroundThread()
-        if (rawCameraIds.isNotEmpty()) {
-            openCamera(rawCameraIds[currentCameraIndex])
-        } else {
-            Log.e(TAG, "No RAW-capable cameras available on device!")
+        isStarted = true
+        backgroundHandler?.post {
+            if (isStarted && cameraDevice == null) {
+                if (rawCameraIds.isNotEmpty()) {
+                    openCameraInternal(rawCameraIds[currentCameraIndex])
+                } else {
+                    Log.e(TAG, "No RAW-capable cameras available on device!")
+                }
+            }
         }
     }
 
-    @Synchronized
     fun stop() {
-        if (!isStarted) return
         isStarted = false
-        closeCamera()
-        stopBackgroundThread()
+        backgroundHandler?.post {
+            closeCameraInternal()
+        }
+    }
+
+    fun destroy() {
+        isStarted = false
+        backgroundHandler?.post {
+            closeCameraInternal()
+            captureExecutor.shutdown()
+            stopBackgroundThreadInternal()
+        }
     }
 
     fun switchCamera() {
         if (rawCameraIds.size <= 1) return
         currentCameraIndex = (currentCameraIndex + 1) % rawCameraIds.size
-        closeCamera()
-        if (isStarted) {
-            openCamera(rawCameraIds[currentCameraIndex])
+        backgroundHandler?.post {
+            closeCameraInternal()
+            if (isStarted) {
+                openCameraInternal(rawCameraIds[currentCameraIndex])
+            }
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun openCamera(cameraId: String) {
+    private fun openCameraInternal(cameraId: String) {
         if (!isStarted) return
+        if (cameraDevice != null) {
+            Log.w(TAG, "Camera already open: ${cameraDevice?.id}")
+            return
+        }
         try {
             val chars = cameraManager.getCameraCharacteristics(cameraId)
             activeCharacteristics = chars
@@ -145,7 +166,9 @@ class RawCameraManager(
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     if (!isStarted) {
+                        Log.i(TAG, "Camera opened after stop, closing immediately: ${camera.id}")
                         camera.close()
+                        cameraDevice = null
                         return
                     }
                     cameraDevice = camera
@@ -153,6 +176,7 @@ class RawCameraManager(
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
+                    Log.w(TAG, "Camera disconnected: ${camera.id}")
                     camera.close()
                     cameraDevice = null
                 }
@@ -161,23 +185,27 @@ class RawCameraManager(
                     Log.e(TAG, "Camera error: $error on camera $cameraId")
                     camera.close()
                     cameraDevice = null
-                    // Retry once after 500ms if error was due to temporary background/busy state
-                    if (isStarted && (error == ERROR_CAMERA_DEVICE || error == ERROR_CAMERA_DISABLED)) {
+                    // Retry once after 300ms if error was due to temporary background/busy state
+                    if (isStarted && (error == ERROR_CAMERA_DEVICE ||
+                                     error == ERROR_CAMERA_DISABLED ||
+                                     error == ERROR_CAMERA_IN_USE ||
+                                     error == ERROR_MAX_CAMERAS_IN_USE)) {
                         backgroundHandler?.postDelayed({
                             if (isStarted && cameraDevice == null) {
-                                openCamera(cameraId)
+                                Log.i(TAG, "Retrying open camera $cameraId after error $error")
+                                openCameraInternal(cameraId)
                             }
-                        }, 500)
+                        }, 300)
                     }
                 }
             }, backgroundHandler)
         } catch (e: CameraAccessException) {
-            Log.w(TAG, "CameraAccessException opening camera $cameraId: ${e.message}, retrying in 500ms")
+            Log.w(TAG, "CameraAccessException opening camera $cameraId: ${e.message}, retrying in 300ms")
             backgroundHandler?.postDelayed({
                 if (isStarted && cameraDevice == null) {
-                    openCamera(cameraId)
+                    openCameraInternal(cameraId)
                 }
-            }, 500)
+            }, 300)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open camera $cameraId", e)
         }
@@ -230,6 +258,7 @@ class RawCameraManager(
 
     private fun createCaptureSession() {
         val device = cameraDevice ?: return
+        if (!isStarted) return
         try {
             imageReader?.close()
             imageReader = ImageReader.newInstance(
@@ -255,6 +284,10 @@ class RawCameraManager(
                 listOf(surface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
+                        if (!isStarted || cameraDevice == null) {
+                            session.close()
+                            return
+                        }
                         captureSession = session
                         try {
                             session.setRepeatingRequest(
@@ -293,6 +326,11 @@ class RawCameraManager(
             return
         }
 
+        if (!isStarted) {
+            image.close()
+            return
+        }
+
         var shouldCapture = false
         var onCaptured: ((Uri?, Uri?) -> Unit)? = null
         synchronized(this) {
@@ -303,6 +341,10 @@ class RawCameraManager(
                 pendingCaptureCallback = null
             }
         }
+
+        val chars = activeCharacteristics
+        val capResult = latestCaptureResult
+        val canCapture = shouldCapture && chars != null && capResult != null
 
         try {
             val plane = image.planes[0]
@@ -337,35 +379,52 @@ class RawCameraManager(
             buffer.rewind()
             renderer.queueRawFrame(buffer, image.width, image.height)
 
-            if (shouldCapture) {
-                val chars = activeCharacteristics
-                val capResult = latestCaptureResult
-                if (chars != null && capResult != null) {
-                    renderer.requestOffscreenCapture { stretchedBitmap ->
-                        captureExecutor.execute {
-                            try {
-                                val jpegUri = mediaSaver.saveDecorrelatedJpeg(
-                                    stretchedBitmap,
-                                    decorEngine.activeColorSpace.name
-                                )
-                                val dngUri = mediaSaver.saveRawDng(
-                                    image,
-                                    chars,
-                                    capResult,
-                                    renderer.cameraRotation
-                                )
-                                stretchedBitmap.recycle()
-                                onCaptured?.invoke(jpegUri, dngUri)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error executing capture", e)
-                                onCaptured?.invoke(null, null)
-                            } finally {
-                                image.close()
-                            }
+            if (canCapture) {
+                val rotation = renderer.cameraRotation
+                val colorSpaceName = decorEngine.activeColorSpace.name
+                val captureLatch = CountDownLatch(1)
+                inFlightCaptureLatch = captureLatch
+                var savedDngUri: Uri? = null
+
+                // 1. Submit RAW DNG saving immediately (takes ownership of image, closes it in finally)
+                captureExecutor.execute {
+                    try {
+                        savedDngUri = mediaSaver.saveRawDng(
+                            image,
+                            chars!!,
+                            capResult!!,
+                            rotation
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error saving RAW DNG", e)
+                    } finally {
+                        image.close()
+                        captureLatch.countDown()
+                        inFlightCaptureLatch = null
+                    }
+                }
+
+                // 2. Request offscreen stretched snapshot from renderer
+                renderer.requestOffscreenCapture { stretchedBitmap ->
+                    // Task 2 executes FIFO on captureExecutor after Task 1 completes
+                    captureExecutor.execute {
+                        var savedJpegUri: Uri? = null
+                        try {
+                            savedJpegUri = mediaSaver.saveDecorrelatedJpeg(
+                                stretchedBitmap,
+                                colorSpaceName
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error saving stretched JPEG", e)
+                        } finally {
+                            stretchedBitmap.recycle()
+                            onCaptured?.invoke(savedJpegUri, savedDngUri)
                         }
                     }
-                    return // Keep image open until DNG is written
                 }
+                return // Image will be closed by Task 1 in captureExecutor
+            } else if (shouldCapture) {
+                onCaptured?.invoke(null, null)
             }
 
             frameCount++
@@ -377,13 +436,18 @@ class RawCameraManager(
                 onFrameProcessed?.invoke(fps)
             }
         } finally {
-            if (!shouldCapture) {
+            if (!canCapture) {
                 image.close()
             }
         }
     }
 
-    private fun closeCamera() {
+    private fun closeCameraInternal() {
+        try {
+            inFlightCaptureLatch?.await(1000, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            Log.w(TAG, "Interrupted waiting for in-flight capture", e)
+        }
         try {
             captureSession?.close()
             captureSession = null
@@ -392,12 +456,13 @@ class RawCameraManager(
             imageReader?.close()
             imageReader = null
         } catch (e: Exception) {
-            Log.e(TAG, "Error closing camera", e)
+            Log.e(TAG, "Error closing camera internal", e)
         }
     }
 
+    @Synchronized
     private fun startBackgroundThread() {
-        if (backgroundThread == null) {
+        if (backgroundThread == null || !backgroundThread!!.isAlive) {
             backgroundThread = HandlerThread("DecorstrCameraBg").apply {
                 start()
                 backgroundHandler = Handler(looper)
@@ -405,7 +470,7 @@ class RawCameraManager(
         }
     }
 
-    private fun stopBackgroundThread() {
+    private fun stopBackgroundThreadInternal() {
         backgroundThread?.quitSafely()
         try {
             backgroundThread?.join()
