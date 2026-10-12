@@ -1,12 +1,11 @@
 #version 300 es
 precision highp float;
 precision highp int;
-precision highp usampler2D;
 
 in vec2 v_TexCoord;
 out vec4 fragColor;
 
-uniform highp usampler2D u_RawTexture;
+uniform usampler2D u_RawTexture;
 uniform vec2 u_TextureSize;
 uniform int u_CfaPattern; // 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
 uniform vec4 u_BlackLevel;
@@ -18,8 +17,9 @@ uniform float u_Gamma;
 uniform float u_Contrast;
 
 float sampleCalibrated(ivec2 p) {
-    p = clamp(p, ivec2(0), ivec2(u_TextureSize) - ivec2(1));
-    float rawVal = float(texelFetch(u_RawTexture, p, 0).r);
+    p = clamp(p, ivec2(0, 0), ivec2(u_TextureSize) - ivec2(1, 1));
+    uint rawUint = texelFetch(u_RawTexture, p, 0).r;
+    float rawVal = float(rawUint);
     int cfaIdx = (p.y % 2) * 2 + (p.x % 2);
     float bl = (cfaIdx == 0) ? u_BlackLevel.x :
                (cfaIdx == 1) ? u_BlackLevel.y :
@@ -39,7 +39,7 @@ vec3 demosaicBayer(ivec2 p, int pattern) {
     // Pattern 1 (GRBG): 0=Gr, 1=R, 2=B, 3=Gb
     // Pattern 2 (GBRG): 0=Gb, 1=B, 2=R, 3=Gr
     // Pattern 3 (BGGR): 0=B, 1=Gb, 2=Gr, 3=R
-    int channel; // 0=R, 1=G, 2=B
+    int channel;
     if (pattern == 0) {
         channel = (quadIdx == 0) ? 0 : (quadIdx == 3) ? 2 : 1;
     } else if (pattern == 1) {
@@ -56,11 +56,9 @@ vec3 demosaicBayer(ivec2 p, int pattern) {
     if (channel == 1) {
         // Pixel is GREEN
         g = cCenter;
-        // Interpolate R and B from horizontal and vertical neighbors
         float hAvg = (sampleCalibrated(p + ivec2(-1, 0)) + sampleCalibrated(p + ivec2(1, 0))) * 0.5;
         float vAvg = (sampleCalibrated(p + ivec2(0, -1)) + sampleCalibrated(p + ivec2(0, 1))) * 0.5;
 
-        // Determine if R is horizontal or vertical neighbor
         bool rIsHorizontal = (pattern == 0 && yMod == 0) || (pattern == 1 && yMod == 0) ||
                              (pattern == 2 && yMod == 1) || (pattern == 3 && yMod == 1);
         if (rIsHorizontal) {
@@ -73,19 +71,15 @@ vec3 demosaicBayer(ivec2 p, int pattern) {
     } else if (channel == 0) {
         // Pixel is RED
         r = cCenter;
-        // Green from 4 cross neighbors
         g = (sampleCalibrated(p + ivec2(-1, 0)) + sampleCalibrated(p + ivec2(1, 0)) +
              sampleCalibrated(p + ivec2(0, -1)) + sampleCalibrated(p + ivec2(0, 1))) * 0.25;
-        // Blue from 4 diagonal neighbors
         b = (sampleCalibrated(p + ivec2(-1, -1)) + sampleCalibrated(p + ivec2(1, -1)) +
              sampleCalibrated(p + ivec2(-1, 1))  + sampleCalibrated(p + ivec2(1, 1))) * 0.25;
     } else {
         // Pixel is BLUE
         b = cCenter;
-        // Green from 4 cross neighbors
         g = (sampleCalibrated(p + ivec2(-1, 0)) + sampleCalibrated(p + ivec2(1, 0)) +
              sampleCalibrated(p + ivec2(0, -1)) + sampleCalibrated(p + ivec2(0, 1))) * 0.25;
-        // Red from 4 diagonal neighbors
         r = (sampleCalibrated(p + ivec2(-1, -1)) + sampleCalibrated(p + ivec2(1, -1)) +
              sampleCalibrated(p + ivec2(-1, 1))  + sampleCalibrated(p + ivec2(1, 1))) * 0.25;
     }
@@ -98,7 +92,7 @@ float labF(float t) {
     const float delta = 6.0 / 29.0;
     const float delta3 = delta * delta * delta;
     if (t > delta3) {
-        return pow(t, 1.0 / 3.0);
+        return pow(max(0.00001, t), 1.0 / 3.0);
     } else {
         return t / (3.0 * delta * delta) + 4.0 / 29.0;
     }
@@ -122,9 +116,9 @@ vec3 rgbToLab(vec3 rgb) {
     float Y = 0.2126729 * rgb.r + 0.7151522 * rgb.g + 0.0721750 * rgb.b;
     float Z = 0.0193339 * rgb.r + 0.1191920 * rgb.g + 0.9503041 * rgb.b;
 
-    float fx = labF(X / Xn);
-    float fy = labF(Y / Yn);
-    float fz = labF(Z / Zn);
+    float fx = labF(max(0.0, X / Xn));
+    float fy = labF(max(0.0, Y / Yn));
+    float fz = labF(max(0.0, Z / Zn));
 
     float L = 116.0 * fy - 16.0;
     float a = 500.0 * (fx - fy);
@@ -175,17 +169,20 @@ vec3 yuvToRgb(vec3 yuv) {
 }
 
 void main() {
+    if (u_TextureSize.x <= 1.0 || u_TextureSize.y <= 1.0) {
+        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+
     ivec2 pixelCoord = ivec2(v_TexCoord * u_TextureSize);
     vec3 linearRgb = demosaicBayer(pixelCoord, u_CfaPattern);
 
     if (u_ColorSpace == 4) {
-        // RAW Normal preview: standard linear -> sRGB
-        vec3 normalDisplay = pow(clamp(linearRgb, 0.0, 1.0), vec3(1.0 / u_Gamma));
+        vec3 normalDisplay = pow(clamp(linearRgb, 0.0, 1.0), vec3(1.0 / max(0.1, u_Gamma)));
         fragColor = vec4(normalDisplay, 1.0);
         return;
     }
 
-    // Convert into active color space
     vec3 colorSpaceCoord;
     if (u_ColorSpace == 1) {
         colorSpaceCoord = rgbToLab(linearRgb);
@@ -195,10 +192,9 @@ void main() {
         colorSpaceCoord = linearRgb;
     }
 
-    // Apply real-time decorrelation stretch: y = W * x + b
+    // Apply affine decorrelation stretch: y = W * x + b
     vec3 stretched = u_DecorrelationMatrix * colorSpaceCoord + u_DecorrelationBias;
 
-    // Convert back to linear RGB
     vec3 displayLinear;
     if (u_ColorSpace == 1) {
         displayLinear = labToRgb(stretched);
@@ -208,10 +204,7 @@ void main() {
         displayLinear = stretched;
     }
 
-    // Contrast adjustment centered at 0.5
     displayLinear = (displayLinear - 0.5) * u_Contrast + 0.5;
-
-    // Display normalization & sRGB gamma
-    vec3 outRgb = pow(clamp(displayLinear, 0.0, 1.0), vec3(1.0 / u_Gamma));
+    vec3 outRgb = pow(clamp(displayLinear, 0.0, 1.0), vec3(1.0 / max(0.1, u_Gamma)));
     fragColor = vec4(outRgb, 1.0);
 }

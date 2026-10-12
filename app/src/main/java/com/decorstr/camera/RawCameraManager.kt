@@ -34,16 +34,19 @@ class RawCameraManager(
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
 
-    // Available RAW camera IDs (e.g. main wide, ultra-wide, telephoto)
+    // Available RAW camera IDs
     private val rawCameraIds = mutableListOf<String>()
     private var currentCameraIndex = 0
+
+    // Lifecycle state
+    private var isStarted = false
 
     // Sensor metadata
     var selectedRawFormat = ImageFormat.RAW_SENSOR
     var activeCfaPattern = 0
     val activeBlackLevels = floatArrayOf(64f, 64f, 64f, 64f)
     var activeWhiteLevel = 1023f
-    var previewSize = Size(4000, 3000)
+    var previewSize = Size(4080, 3060)
 
     // Performance tracking
     private var frameCount = 0
@@ -68,7 +71,6 @@ class RawCameraManager(
                 }
             }
 
-            // Fallback: if no back camera reported RAW, check front or all
             if (rawCameraIds.isEmpty()) {
                 for (id in cameraManager.cameraIdList) {
                     val chars = cameraManager.getCameraCharacteristics(id)
@@ -78,12 +80,16 @@ class RawCameraManager(
                     }
                 }
             }
+            Log.i(TAG, "Total RAW cameras available: ${rawCameraIds.size}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed enumerating cameras", e)
         }
     }
 
+    @Synchronized
     fun start() {
+        if (isStarted) return
+        isStarted = true
         startBackgroundThread()
         if (rawCameraIds.isNotEmpty()) {
             openCamera(rawCameraIds[currentCameraIndex])
@@ -92,7 +98,10 @@ class RawCameraManager(
         }
     }
 
+    @Synchronized
     fun stop() {
+        if (!isStarted) return
+        isStarted = false
         closeCamera()
         stopBackgroundThread()
     }
@@ -101,17 +110,24 @@ class RawCameraManager(
         if (rawCameraIds.size <= 1) return
         currentCameraIndex = (currentCameraIndex + 1) % rawCameraIds.size
         closeCamera()
-        openCamera(rawCameraIds[currentCameraIndex])
+        if (isStarted) {
+            openCamera(rawCameraIds[currentCameraIndex])
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun openCamera(cameraId: String) {
+        if (!isStarted) return
         try {
             val chars = cameraManager.getCameraCharacteristics(cameraId)
             inspectAndConfigureMetadata(chars)
 
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
+                    if (!isStarted) {
+                        camera.close()
+                        return
+                    }
                     cameraDevice = camera
                     createCaptureSession()
                 }
@@ -122,11 +138,26 @@ class RawCameraManager(
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
-                    Log.e(TAG, "Camera error: $error")
+                    Log.e(TAG, "Camera error: $error on camera $cameraId")
                     camera.close()
                     cameraDevice = null
+                    // Retry once after 500ms if error was due to temporary background/busy state
+                    if (isStarted && (error == ERROR_CAMERA_DEVICE || error == ERROR_CAMERA_DISABLED)) {
+                        backgroundHandler?.postDelayed({
+                            if (isStarted && cameraDevice == null) {
+                                openCamera(cameraId)
+                            }
+                        }, 500)
+                    }
                 }
             }, backgroundHandler)
+        } catch (e: CameraAccessException) {
+            Log.w(TAG, "CameraAccessException opening camera $cameraId: ${e.message}, retrying in 500ms")
+            backgroundHandler?.postDelayed({
+                if (isStarted && cameraDevice == null) {
+                    openCamera(cameraId)
+                }
+            }, 500)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open camera $cameraId", e)
         }
@@ -144,18 +175,15 @@ class RawCameraManager(
             else -> ImageFormat.RAW_SENSOR
         }
 
-        // 2. Select resolution: S26+ / Samsung sensors have ultra-high (50MP) and binned (12MP)
+        // 2. Select resolution
         val rawSizes = map.getOutputSizes(selectedRawFormat)?.sortedByDescending { it.width * it.height } ?: emptyList()
-        Log.i(TAG, "Available RAW sizes: ${rawSizes.joinToString { "${it.width}x${it.height}" }}")
-
-        // Pick the binned (~12MP) size for fluid 30-60 FPS live preview if multi-resolution detected
         previewSize = rawSizes.firstOrNull { (it.width * it.height) <= MAX_PREVIEW_PIXELS }
             ?: rawSizes.lastOrNull()
-            ?: Size(4000, 3000)
+            ?: Size(4080, 3060)
 
         Log.i(TAG, "Selected preview size: ${previewSize.width}x${previewSize.height} format: $selectedRawFormat")
 
-        // 3. CFA (Color Filter Arrangement) pattern: 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
+        // 3. CFA pattern: 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
         activeCfaPattern = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0
         renderer.cfaPattern = activeCfaPattern
 
@@ -169,7 +197,7 @@ class RawCameraManager(
         }
 
         // 5. White Level
-        activeWhiteLevel = (chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023).toFloat()
+        activeWhiteLevel = (chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 4095).toFloat()
         renderer.whiteLevel = activeWhiteLevel
 
         Log.i(TAG, "Configured CFA: $activeCfaPattern, BlackLevel: ${activeBlackLevels.contentToString()}, WhiteLevel: $activeWhiteLevel")
@@ -179,7 +207,6 @@ class RawCameraManager(
         val device = cameraDevice ?: return
         try {
             imageReader?.close()
-            // Allocate ImageReader with maxImages = 3 for smooth pipeline
             imageReader = ImageReader.newInstance(
                 previewSize.width,
                 previewSize.height,
@@ -194,7 +221,6 @@ class RawCameraManager(
             val surface = imageReader!!.surface
             val requestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
-                // Continuous 3A controls
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
@@ -260,11 +286,9 @@ class RawCameraManager(
                 )
             }
 
-            // Rewind buffer and send to OpenGL texture
             buffer.rewind()
             renderer.queueRawFrame(buffer, image.width, image.height)
 
-            // Track FPS
             frameCount++
             val now = System.currentTimeMillis()
             if (now - lastFpsTimestamp >= 1000) {
@@ -292,9 +316,11 @@ class RawCameraManager(
     }
 
     private fun startBackgroundThread() {
-        backgroundThread = HandlerThread("DecorstrCameraBg").apply {
-            start()
-            backgroundHandler = Handler(looper)
+        if (backgroundThread == null) {
+            backgroundThread = HandlerThread("DecorstrCameraBg").apply {
+                start()
+                backgroundHandler = Handler(looper)
+            }
         }
     }
 

@@ -2,7 +2,9 @@ package com.decorstr
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.SeekBar
 import android.widget.TextView
@@ -39,7 +41,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            startCameraPreview()
+            cameraManager.start()
         } else {
             Toast.makeText(this, "Camera permission is required for real-time RAW preview", Toast.LENGTH_LONG).show()
         }
@@ -47,6 +49,20 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Keep screen on and display over keyguard/lock screen
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+
         setContentView(R.layout.activity_main)
 
         glSurfaceView = findViewById(R.id.glSurfaceView)
@@ -78,7 +94,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupControls()
-        checkPermissionsAndStart()
     }
 
     private fun setupControls() {
@@ -151,23 +166,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun checkPermissionsAndStart() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            startCameraPreview()
-        } else {
-            permissionLauncher.launch(Manifest.permission.CAMERA)
-        }
-    }
-
-    private fun startCameraPreview() {
-        cameraManager.start()
-    }
-
     override fun onResume() {
         super.onResume()
         glSurfaceView.onResume()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             cameraManager.start()
+        } else {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 

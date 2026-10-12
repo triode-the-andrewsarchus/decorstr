@@ -21,7 +21,6 @@ class DecorstrRenderer(
 
         // Fullscreen quad vertices [x, y, u, v]
         private val QUAD_VERTICES = floatArrayOf(
-            // Position (X, Y),   TexCoord (U, V)
             -1.0f, -1.0f,        0.0f, 1.0f,
              1.0f, -1.0f,        1.0f, 1.0f,
             -1.0f,  1.0f,        0.0f, 0.0f,
@@ -90,11 +89,14 @@ class DecorstrRenderer(
 
         if (programId == 0) return
 
-        GLES30.glUseProgram(programId)
+        var width = 0
+        var height = 0
 
         // Upload new texture frame if available
         synchronized(frameLock) {
-            if (isNewFrameAvailable && pendingFrameBuffer != null) {
+            width = frameWidth
+            height = frameHeight
+            if (isNewFrameAvailable && pendingFrameBuffer != null && width > 0 && height > 0) {
                 GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
 
@@ -103,8 +105,8 @@ class DecorstrRenderer(
                     GLES30.GL_TEXTURE_2D,
                     0,
                     GLES30.GL_R16UI,
-                    frameWidth,
-                    frameHeight,
+                    width,
+                    height,
                     0,
                     GLES30.GL_RED_INTEGER,
                     GLES30.GL_UNSIGNED_SHORT,
@@ -115,18 +117,24 @@ class DecorstrRenderer(
             }
         }
 
+        // If no camera frame has arrived yet, don't draw uninitialized quad
+        if (width <= 0 || height <= 0) {
+            return
+        }
+
+        GLES30.glUseProgram(programId)
+
         // Bind texture unit 0
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
         GLES30.glUniform1i(uRawTextureLoc, 0)
 
         // Bind uniform parameters
-        GLES30.glUniform2f(uTextureSizeLoc, frameWidth.toFloat(), frameHeight.toFloat())
+        GLES30.glUniform2f(uTextureSizeLoc, width.toFloat(), height.toFloat())
         GLES30.glUniform1i(uCfaPatternLoc, cfaPattern)
         GLES30.glUniform4f(uBlackLevelLoc, blackLevels[0], blackLevels[1], blackLevels[2], blackLevels[3])
         GLES30.glUniform1f(uWhiteLevelLoc, whiteLevel)
 
-        // OpenGL expects column-major matrices, our Matrix3x3 is row-major: pass transpose=true
         GLES30.glUniformMatrix3fv(uDecorMatrixLoc, 1, true, decorEngine.currentMatrix, 0)
         GLES30.glUniform3fv(uDecorBiasLoc, 1, decorEngine.currentBias, 0)
         GLES30.glUniform1i(uColorSpaceLoc, decorEngine.activeColorSpace.id)
@@ -140,38 +148,46 @@ class DecorstrRenderer(
     }
 
     private fun setupShaders() {
-        val vertSource = loadAsset("shaders/decorstr.vert")
-        val fragSource = loadAsset("shaders/decorstr.frag")
+        try {
+            val vertSource = loadAsset("shaders/decorstr.vert")
+            val fragSource = loadAsset("shaders/decorstr.frag")
 
-        val vertShader = compileShader(GLES30.GL_VERTEX_SHADER, vertSource)
-        val fragShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fragSource)
+            val vertShader = compileShader(GLES30.GL_VERTEX_SHADER, vertSource)
+            if (vertShader == 0) return
 
-        programId = GLES30.glCreateProgram()
-        GLES30.glAttachShader(programId, vertShader)
-        GLES30.glAttachShader(programId, fragShader)
-        GLES30.glLinkProgram(programId)
+            val fragShader = compileShader(GLES30.GL_FRAGMENT_SHADER, fragSource)
+            if (fragShader == 0) return
 
-        val linkStatus = IntArray(1)
-        GLES30.glGetProgramiv(programId, GLES30.GL_LINK_STATUS, linkStatus, 0)
-        if (linkStatus[0] == 0) {
-            val log = GLES30.glGetProgramInfoLog(programId)
-            Log.e(TAG, "Shader program link failed: $log")
-            GLES30.glDeleteProgram(programId)
-            programId = 0
-            return
+            programId = GLES30.glCreateProgram()
+            GLES30.glAttachShader(programId, vertShader)
+            GLES30.glAttachShader(programId, fragShader)
+            GLES30.glLinkProgram(programId)
+
+            val linkStatus = IntArray(1)
+            GLES30.glGetProgramiv(programId, GLES30.GL_LINK_STATUS, linkStatus, 0)
+            if (linkStatus[0] == 0) {
+                val log = GLES30.glGetProgramInfoLog(programId)
+                Log.e(TAG, "Shader program link failed: $log")
+                GLES30.glDeleteProgram(programId)
+                programId = 0
+                return
+            }
+
+            // Query uniforms
+            uRawTextureLoc = GLES30.glGetUniformLocation(programId, "u_RawTexture")
+            uTextureSizeLoc = GLES30.glGetUniformLocation(programId, "u_TextureSize")
+            uCfaPatternLoc = GLES30.glGetUniformLocation(programId, "u_CfaPattern")
+            uBlackLevelLoc = GLES30.glGetUniformLocation(programId, "u_BlackLevel")
+            uWhiteLevelLoc = GLES30.glGetUniformLocation(programId, "u_WhiteLevel")
+            uDecorMatrixLoc = GLES30.glGetUniformLocation(programId, "u_DecorrelationMatrix")
+            uDecorBiasLoc = GLES30.glGetUniformLocation(programId, "u_DecorrelationBias")
+            uColorSpaceLoc = GLES30.glGetUniformLocation(programId, "u_ColorSpace")
+            uGammaLoc = GLES30.glGetUniformLocation(programId, "u_Gamma")
+            uContrastLoc = GLES30.glGetUniformLocation(programId, "u_Contrast")
+            Log.i(TAG, "Shaders linked successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting up shaders", e)
         }
-
-        // Query uniforms
-        uRawTextureLoc = GLES30.glGetUniformLocation(programId, "u_RawTexture")
-        uTextureSizeLoc = GLES30.glGetUniformLocation(programId, "u_TextureSize")
-        uCfaPatternLoc = GLES30.glGetUniformLocation(programId, "u_CfaPattern")
-        uBlackLevelLoc = GLES30.glGetUniformLocation(programId, "u_BlackLevel")
-        uWhiteLevelLoc = GLES30.glGetUniformLocation(programId, "u_WhiteLevel")
-        uDecorMatrixLoc = GLES30.glGetUniformLocation(programId, "u_DecorrelationMatrix")
-        uDecorBiasLoc = GLES30.glGetUniformLocation(programId, "u_DecorrelationBias")
-        uColorSpaceLoc = GLES30.glGetUniformLocation(programId, "u_ColorSpace")
-        uGammaLoc = GLES30.glGetUniformLocation(programId, "u_Gamma")
-        uContrastLoc = GLES30.glGetUniformLocation(programId, "u_Contrast")
     }
 
     private fun setupQuad() {
@@ -192,11 +208,9 @@ class DecorstrRenderer(
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vboId)
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, QUAD_VERTICES.size * 4, buffer, GLES30.GL_STATIC_DRAW)
 
-        // Attribute 0: Position (vec2, stride 16, offset 0)
         GLES30.glEnableVertexAttribArray(0)
         GLES30.glVertexAttribPointer(0, 2, GLES30.GL_FLOAT, false, 4 * 4, 0)
 
-        // Attribute 1: TexCoord (vec2, stride 16, offset 8)
         GLES30.glEnableVertexAttribArray(1)
         GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, 4 * 4, 2 * 4)
 
@@ -214,6 +228,20 @@ class DecorstrRenderer(
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        // Initialize with a safe 2x2 placeholder texture
+        val dummy = ByteBuffer.allocateDirect(2 * 2 * 2).order(ByteOrder.nativeOrder())
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D,
+            0,
+            GLES30.GL_R16UI,
+            2,
+            2,
+            0,
+            GLES30.GL_RED_INTEGER,
+            GLES30.GL_UNSIGNED_SHORT,
+            dummy
+        )
     }
 
     private fun compileShader(type: Int, source: String): Int {
