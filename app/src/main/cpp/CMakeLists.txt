@@ -21,3 +21,8 @@ target_link_libraries(decorstr_native
     ${egl-lib}
     ${jnigraphics-lib}
 )
+
+# Enforce 16KB ELF page size alignment for Android 15/16 (e.g. Galaxy S26+)
+target_link_options(decorstr_native PRIVATE
+    "-Wl,-z,max-page-size=16384"
+)

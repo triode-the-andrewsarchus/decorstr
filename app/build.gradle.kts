@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "com.decorstr"
     compileSdk = 34
-    ndkVersion = "26.1.10909125"
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.decorstr"
@@ -20,7 +20,8 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags("-std=c++17 -O3 -Wall")
-                arguments("-DANDROID_STL=c++_shared")
+                // Statically link C++ runtime to eliminate unaligned libc++_shared.so
+                arguments("-DANDROID_STL=c++_static")
             }
         }
 
@@ -60,6 +61,9 @@ android {
     }
 
     packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
