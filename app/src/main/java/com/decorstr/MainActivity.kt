@@ -17,6 +17,7 @@ import com.decorstr.engine.ColorSpace
 import com.decorstr.engine.DecorrelationEngine
 import com.decorstr.gl.DecorstrGLSurfaceView
 import com.decorstr.gl.DecorstrRenderer
+import com.decorstr.sensors.StabilityTracker
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.ChipGroup
 
@@ -26,6 +27,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var renderer: DecorstrRenderer
     private lateinit var decorEngine: DecorrelationEngine
     private lateinit var cameraManager: RawCameraManager
+    private lateinit var stabilityTracker: StabilityTracker
+
+    private var lastFps = 0.0f
+    private var lastStableState = false
 
     private lateinit var tvStatus: TextView
     private lateinit var tvSmoothingLabel: TextView
@@ -93,25 +98,43 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Initialize stability tracker for live preview temporal denoiser
+        stabilityTracker = StabilityTracker(this) { score, isStable ->
+            renderer.stabilityScore = score
+            if (isStable != lastStableState) {
+                lastStableState = isStable
+                runOnUiThread {
+                    updateStatusText()
+                }
+            }
+        }
+
         // Initialize camera manager
         cameraManager = RawCameraManager(this, renderer, decorEngine) { fps ->
             runOnUiThread {
-                tvStatus.text = String.format(
-                    "%.1f FPS | %dx%d",
-                    fps,
-                    cameraManager.previewSize.width,
-                    cameraManager.previewSize.height
-                )
+                lastFps = fps
+                updateStatusText()
             }
         }
 
         setupControls()
     }
 
+    private fun updateStatusText() {
+        if (lastStableState) {
+            tvStatus.text = String.format("%.1f FPS | STABLE ✦", lastFps)
+            tvStatus.setTextColor(ContextCompat.getColor(this, R.color.accent_cyan))
+        } else {
+            tvStatus.text = String.format("%.1f FPS", lastFps)
+            tvStatus.setTextColor(ContextCompat.getColor(this, R.color.white))
+        }
+    }
+
     private fun setupControls() {
         // Preset selector
         chipGroupPresets.setOnCheckedStateChangeListener { _, checkedIds ->
             if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
+            renderer.resetAccumulation()
             when (checkedIds[0]) {
                 R.id.chipLab -> {
                     decorEngine.activeColorSpace = ColorSpace.LAB
@@ -156,6 +179,7 @@ class MainActivity : AppCompatActivity() {
 
         // Lock / Freeze Matrix
         btnLockMatrix.setOnClickListener {
+            renderer.resetAccumulation()
             val locked = !decorEngine.isTransformLocked
             decorEngine.isTransformLocked = locked
             if (locked) {
@@ -169,6 +193,7 @@ class MainActivity : AppCompatActivity() {
 
         // Switch Camera
         btnSwitchCam.setOnClickListener {
+            renderer.resetAccumulation()
             cameraManager.switchCamera()
         }
 
@@ -202,6 +227,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         glSurfaceView.onResume()
+        renderer.resetAccumulation()
+        stabilityTracker.start()
         btnCapture.isEnabled = true
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             cameraManager.start()
@@ -211,6 +238,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        stabilityTracker.stop()
         cameraManager.stop()
         glSurfaceView.onPause()
         super.onPause()

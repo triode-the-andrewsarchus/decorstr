@@ -88,6 +88,7 @@ class DecorstrRenderer(
 
     fun toggleAspect() {
         isAspectFill = !isAspectFill
+        resetAccumulation()
     }
 
     fun setWhiteBalanceGains(r: Float, g: Float, b: Float) {
@@ -95,6 +96,71 @@ class DecorstrRenderer(
             whiteBalanceGains[0] = 0.8f * whiteBalanceGains[0] + 0.2f * r
             whiteBalanceGains[1] = 0.8f * whiteBalanceGains[1] + 0.2f * g
             whiteBalanceGains[2] = 0.8f * whiteBalanceGains[2] + 0.2f * b
+        }
+    }
+
+    // Temporal accumulation (Live stability denoiser)
+    @Volatile var stabilityScore: Float = 0.0f
+    @Volatile var isDenoiseEnabled: Boolean = true
+    private var isAccumulationResetRequested = false
+    private var accumFboId = 0
+    private var accumTextureId = 0
+
+    fun resetAccumulation() {
+        synchronized(frameLock) {
+            isAccumulationResetRequested = true
+        }
+    }
+
+    private fun initAccumulationBuffer(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        destroyAccumulationBuffer()
+
+        val fbos = IntArray(1)
+        GLES30.glGenFramebuffers(1, fbos, 0)
+        accumFboId = fbos[0]
+
+        val texs = IntArray(1)
+        GLES30.glGenTextures(1, texs, 0)
+        accumTextureId = texs[0]
+
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, accumTextureId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, width, height, 0,
+            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+        )
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, accumFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, accumTextureId, 0
+        )
+
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            Log.e(TAG, "Accumulation FBO incomplete: $status")
+            destroyAccumulationBuffer()
+        } else {
+            GLES30.glClearColor(0f, 0f, 0f, 1f)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    private fun destroyAccumulationBuffer() {
+        if (accumFboId != 0) {
+            val fbos = intArrayOf(accumFboId)
+            GLES30.glDeleteFramebuffers(1, fbos, 0)
+            accumFboId = 0
+        }
+        if (accumTextureId != 0) {
+            val texs = intArrayOf(accumTextureId)
+            GLES30.glDeleteTextures(1, texs, 0)
+            accumTextureId = 0
         }
     }
 
@@ -113,12 +179,14 @@ class DecorstrRenderer(
         setupShaders()
         setupQuad()
         setupTexture()
+        destroyAccumulationBuffer()
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         surfaceWidth = width
         surfaceHeight = height
         GLES30.glViewport(0, 0, width, height)
+        initAccumulationBuffer(width, height)
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -126,8 +194,8 @@ class DecorstrRenderer(
 
         if (programId == 0) return
 
-        var width = 0
-        var height = 0
+        val width: Int
+        val height: Int
 
         // Upload new texture frame if available
         synchronized(frameLock) {
@@ -218,10 +286,61 @@ class DecorstrRenderer(
 
         GLES30.glUniform2f(uScaleLoc, scaleX, scaleY)
 
-        // Draw quad
-        GLES30.glBindVertexArray(vaoId)
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
-        GLES30.glBindVertexArray(0)
+        val denoiseActive = isDenoiseEnabled && accumFboId != 0
+        if (denoiseActive) {
+            val stability = stabilityScore
+            val isReset = synchronized(frameLock) {
+                val r = isAccumulationResetRequested
+                isAccumulationResetRequested = false
+                r
+            }
+
+            // When moving or after reset, beta = 1.0 (instant, overwrites history)
+            // When steady (stability -> 1.0), beta drops to 0.12 (88% history, ~8x noise reduction)
+            val beta = if (isReset) 1.0f else (1.0f - 0.88f * stability).coerceIn(0.12f, 1.0f)
+
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, accumFboId)
+            GLES30.glViewport(0, 0, surfaceWidth, surfaceHeight)
+
+            if (isReset) {
+                GLES30.glClearColor(0f, 0f, 0f, 1f)
+                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            }
+
+            if (beta < 0.98f) {
+                GLES30.glEnable(GLES30.GL_BLEND)
+                GLES30.glBlendColor(0f, 0f, 0f, beta)
+                GLES30.glBlendFunc(GLES30.GL_CONSTANT_ALPHA, GLES30.GL_ONE_MINUS_CONSTANT_ALPHA)
+            } else {
+                GLES30.glDisable(GLES30.GL_BLEND)
+            }
+
+            // Draw quad into accumulation buffer
+            GLES30.glBindVertexArray(vaoId)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+            GLES30.glBindVertexArray(0)
+
+            GLES30.glDisable(GLES30.GL_BLEND)
+
+            // Blit accumulated result to screen (FBO 0)
+            GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, accumFboId)
+            GLES30.glBindFramebuffer(GLES30.GL_DRAW_FRAMEBUFFER, 0)
+            GLES30.glBlitFramebuffer(
+                0, 0, surfaceWidth, surfaceHeight,
+                0, 0, surfaceWidth, surfaceHeight,
+                GLES30.GL_COLOR_BUFFER_BIT,
+                GLES30.GL_NEAREST
+            )
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        } else {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glViewport(0, 0, surfaceWidth, surfaceHeight)
+
+            // Draw quad directly to screen
+            GLES30.glBindVertexArray(vaoId)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+            GLES30.glBindVertexArray(0)
+        }
 
         // Process full-resolution offscreen capture if requested
         val offscreenCb: ((Bitmap) -> Unit)? = synchronized(frameLock) {
