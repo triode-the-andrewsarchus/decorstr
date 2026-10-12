@@ -1,0 +1,154 @@
+#include <jni.h>
+#include <android/log.h>
+#include <memory>
+#include "covariance.h"
+#include "whitening.h"
+
+#define LOG_TAG "DecorstrNative"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+static std::unique_ptr<decorstr::WhiteningEngine> gWhiteningEngine;
+
+extern "C" {
+
+JNIEXPORT void JNICALL
+Java_com_decorstr_engine_NativeDecorrelation_nativeInit(JNIEnv* /*env*/, jobject /*thiz*/) {
+    gWhiteningEngine = std::make_unique<decorstr::WhiteningEngine>();
+    LOGI("Native decorstr engine initialized");
+}
+
+JNIEXPORT void JNICALL
+Java_com_decorstr_engine_NativeDecorrelation_nativeReset(JNIEnv* /*env*/, jobject /*thiz*/) {
+    if (gWhiteningEngine) {
+        gWhiteningEngine->reset();
+    }
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer16(
+    JNIEnv* env,
+    jobject /*thiz*/,
+    jobject byteBuffer,
+    jint width,
+    jint height,
+    jint rowStridePixels,
+    jint bayerPattern,
+    jfloatArray jBlackLevels,
+    jfloat whiteLevel,
+    jint colorSpaceMode,
+    jfloat alphaSmoothing,
+    jboolean lockTransform,
+    jfloat targetSigma)
+{
+    if (!gWhiteningEngine) {
+        gWhiteningEngine = std::make_unique<decorstr::WhiteningEngine>();
+    }
+
+    const uint16_t* rawData = static_cast<const uint16_t*>(env->GetDirectBufferAddress(byteBuffer));
+    if (!rawData) {
+        LOGE("Failed to get direct buffer address");
+        return nullptr;
+    }
+
+    jfloat blackLevels[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (jBlackLevels != nullptr && env->GetArrayLength(jBlackLevels) >= 4) {
+        env->GetFloatArrayRegion(jBlackLevels, 0, 4, blackLevels);
+    }
+
+    auto mode = static_cast<decorstr::ColorSpaceMode>(colorSpaceMode);
+
+    decorstr::CovarianceResult covRes = decorstr::estimateCovarianceBayer16(
+        rawData, width, height, rowStridePixels, bayerPattern,
+        blackLevels, whiteLevel, mode
+    );
+
+    decorstr::WhiteningResult whitened = gWhiteningEngine->updateAndCompute(
+        covRes, alphaSmoothing, lockTransform, mode, targetSigma
+    );
+
+    // Return 15 floats: [matrix (9), bias (3), eigenvalues (3)]
+    jfloatArray result = env->NewFloatArray(15);
+    if (!result) return nullptr;
+
+    jfloat outData[15];
+    if (whitened.valid) {
+        for (int i = 0; i < 9; ++i) outData[i] = whitened.matrix[i];
+        for (int i = 0; i < 3; ++i) outData[9 + i] = whitened.bias[i];
+        for (int i = 0; i < 3; ++i) outData[12 + i] = whitened.eigenvalues[i];
+    } else {
+        // Fallback to identity
+        outData[0] = 1.0f; outData[1] = 0.0f; outData[2] = 0.0f;
+        outData[3] = 0.0f; outData[4] = 1.0f; outData[5] = 0.0f;
+        outData[6] = 0.0f; outData[7] = 0.0f; outData[8] = 1.0f;
+        outData[9] = 0.0f; outData[10] = 0.0f; outData[11] = 0.0f;
+        outData[12] = 1.0f; outData[13] = 1.0f; outData[14] = 1.0f;
+    }
+
+    env->SetFloatArrayRegion(result, 0, 15, outData);
+    return result;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer10(
+    JNIEnv* env,
+    jobject /*thiz*/,
+    jobject byteBuffer,
+    jint width,
+    jint height,
+    jint rowStrideBytes,
+    jint bayerPattern,
+    jfloatArray jBlackLevels,
+    jfloat whiteLevel,
+    jint colorSpaceMode,
+    jfloat alphaSmoothing,
+    jboolean lockTransform,
+    jfloat targetSigma)
+{
+    if (!gWhiteningEngine) {
+        gWhiteningEngine = std::make_unique<decorstr::WhiteningEngine>();
+    }
+
+    const uint8_t* rawData = static_cast<const uint8_t*>(env->GetDirectBufferAddress(byteBuffer));
+    if (!rawData) {
+        LOGE("Failed to get direct buffer address for RAW10");
+        return nullptr;
+    }
+
+    jfloat blackLevels[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (jBlackLevels != nullptr && env->GetArrayLength(jBlackLevels) >= 4) {
+        env->GetFloatArrayRegion(jBlackLevels, 0, 4, blackLevels);
+    }
+
+    auto mode = static_cast<decorstr::ColorSpaceMode>(colorSpaceMode);
+
+    decorstr::CovarianceResult covRes = decorstr::estimateCovarianceBayer10(
+        rawData, width, height, rowStrideBytes, bayerPattern,
+        blackLevels, whiteLevel, mode
+    );
+
+    decorstr::WhiteningResult whitened = gWhiteningEngine->updateAndCompute(
+        covRes, alphaSmoothing, lockTransform, mode, targetSigma
+    );
+
+    jfloatArray result = env->NewFloatArray(15);
+    if (!result) return nullptr;
+
+    jfloat outData[15];
+    if (whitened.valid) {
+        for (int i = 0; i < 9; ++i) outData[i] = whitened.matrix[i];
+        for (int i = 0; i < 3; ++i) outData[9 + i] = whitened.bias[i];
+        for (int i = 0; i < 3; ++i) outData[12 + i] = whitened.eigenvalues[i];
+    } else {
+        outData[0] = 1.0f; outData[1] = 0.0f; outData[2] = 0.0f;
+        outData[3] = 0.0f; outData[4] = 1.0f; outData[5] = 0.0f;
+        outData[6] = 0.0f; outData[7] = 0.0f; outData[8] = 1.0f;
+        outData[9] = 0.0f; outData[10] = 0.0f; outData[11] = 0.0f;
+        outData[12] = 1.0f; outData[13] = 1.0f; outData[14] = 1.0f;
+    }
+
+    env->SetFloatArrayRegion(result, 0, 15, outData);
+    return result;
+}
+
+} // extern "C"

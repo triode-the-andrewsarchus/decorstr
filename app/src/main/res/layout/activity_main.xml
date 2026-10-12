@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black">
+
+    <!-- OpenGL Fullscreen Preview Surface -->
+    <com.decorstr.gl.DecorstrGLSurfaceView
+        android:id="@+id/glSurfaceView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Top HUD Bar -->
+    <LinearLayout
+        android:id="@+id/topBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="12dp"
+        android:background="#88000000"
+        android:gravity="center_vertical"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:id="@+id/tvTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Decorstr"
+            android:textColor="@color/accent_gold"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="12dp"
+            android:text="Initializing..."
+            android:textColor="@color/white"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnSwitchCam"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:text="@string/btn_switch_camera"
+            android:textSize="11sp"
+            android:textColor="@color/white"
+            android:backgroundTint="#444444" />
+    </LinearLayout>
+
+    <!-- Preset Selection Row -->
+    <HorizontalScrollView
+        android:id="@+id/presetScrollView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:scrollbars="none"
+        app:layout_constraintTop_toBottomOf="@id/topBar">
+
+        <com.google.android.material.chip.ChipGroup
+            android:id="@+id/chipGroupPresets"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:singleSelection="true">
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipLab"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="@string/preset_lab"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipRgb"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_rgb"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipPca"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_pca"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipNormal"
+                style="@style/Widget.MaterialComponents.Chip.Choice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/preset_normal"
+                android:textColor="@color/white"
+                app:chipBackgroundColor="@color/dark_gray" />
+        </com.google.android.material.chip.ChipGroup>
+    </HorizontalScrollView>
+
+    <!-- Bottom Controls Card -->
+    <androidx.cardview.widget.CardView
+        android:id="@+id/bottomControlsCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="12dp"
+        app:cardCornerRadius="16dp"
+        app:cardBackgroundColor="#AA1A1A1A"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <!-- Temporal Smoothing Slider -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/tvSmoothingLabel"
+                    android:layout_width="140dp"
+                    android:layout_height="wrap_content"
+                    android:text="Smoothing: 0.15"
+                    android:textColor="@color/white"
+                    android:textSize="12sp" />
+
+                <SeekBar
+                    android:id="@+id/seekSmoothing"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="100"
+                    android:progress="15" />
+            </LinearLayout>
+
+            <!-- Intensity / Contrast Slider -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="4dp">
+
+                <TextView
+                    android:id="@+id/tvIntensityLabel"
+                    android:layout_width="140dp"
+                    android:layout_height="wrap_content"
+                    android:text="Intensity: 0.25"
+                    android:textColor="@color/white"
+                    android:textSize="12sp" />
+
+                <SeekBar
+                    android:id="@+id/seekIntensity"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="100"
+                    android:progress="25" />
+            </LinearLayout>
+
+            <!-- Action Buttons Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:layout_marginTop="8dp">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLockMatrix"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/btn_lock"
+                    android:textSize="12sp"
+                    android:textColor="@color/black"
+                    app:backgroundTint="@color/accent_gold" />
+
+                <Space
+                    android:layout_width="24dp"
+                    android:layout_height="wrap_content" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCapture"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/btn_capture"
+                    android:textSize="12sp"
+                    android:textColor="@color/black"
+                    app:backgroundTint="@color/accent_cyan" />
+            </LinearLayout>
+
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
+
+</androidx.constraintlayout.widget.ConstraintLayout>
