@@ -16,7 +16,9 @@ enum class ColorSpaceMode {
     YYE = 7,
     YBK = 8,
     YWE = 9,
-    RGB0 = 10
+    RGB0 = 10,
+    YBL = 11,
+    YGN = 12
 };
 
 struct Vec3 {
@@ -51,6 +53,12 @@ Vec3 ybkToLinearRgb(const Vec3& c);
 
 Vec3 linearRgbToYwe(const Vec3& rgb);
 Vec3 yweToLinearRgb(const Vec3& c);
+
+Vec3 linearRgbToYbl(const Vec3& rgb);
+Vec3 yblToLinearRgb(const Vec3& c);
+
+Vec3 linearRgbToYgn(const Vec3& rgb);
+Vec3 ygnToLinearRgb(const Vec3& c);
 
 Vec3 convertRgbToSpace(const Vec3& rgb, ColorSpaceMode mode);
 Vec3 convertSpaceToRgb(const Vec3& c, ColorSpaceMode mode);

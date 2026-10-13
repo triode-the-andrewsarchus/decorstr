@@ -230,6 +230,39 @@ vec3 yweToRgb(vec3 c) {
     return yuvToRgb(yuv);
 }
 
+vec3 rgbToYbl(vec3 rgb) {
+    vec3 yuv = rgbToYuv(rgb);
+    return vec3(yuv.x, (yuv.y - 0.5) * 3.0 + 0.5, (yuv.z - 0.5) * 0.7 + 0.5);
+}
+
+vec3 yblToRgb(vec3 c) {
+    vec3 yuv = vec3(c.x, (c.y - 0.5) / 3.0 + 0.5, (c.z - 0.5) / 0.7 + 0.5);
+    return yuvToRgb(yuv);
+}
+
+vec3 rgbToYgn(vec3 rgb) {
+    vec3 yuv = rgbToYuv(rgb);
+    float uc = yuv.y - 0.5;
+    float vc = yuv.z - 0.5;
+    float c_green = (-0.4892 * uc - 0.8721 * vc) * 2.5;
+    float c_ortho = ( 0.8721 * uc - 0.4892 * vc) * 0.8;
+    float u = -0.4892 * c_green + 0.8721 * c_ortho + 0.5;
+    float v = -0.8721 * c_green - 0.4892 * c_ortho + 0.5;
+    return vec3(yuv.x, u, v);
+}
+
+vec3 ygnToRgb(vec3 c) {
+    float uc = c.y - 0.5;
+    float vc = c.z - 0.5;
+    float c_green = -0.4892 * uc - 0.8721 * vc;
+    float c_ortho =  0.8721 * uc - 0.4892 * vc;
+    float c_g_orig = c_green / 2.5;
+    float c_o_orig = c_ortho / 0.8;
+    float u = -0.4892 * c_g_orig + 0.8721 * c_o_orig + 0.5;
+    float v = -0.8721 * c_g_orig - 0.4892 * c_o_orig + 0.5;
+    return yuvToRgb(vec3(c.x, u, v));
+}
+
 void main() {
     if (u_TextureSize.x <= 1.0 || u_TextureSize.y <= 1.0) {
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -261,6 +294,10 @@ void main() {
         colorSpaceCoord = rgbToYbk(linearRgb);
     } else if (u_ColorSpace == 9) {
         colorSpaceCoord = rgbToYwe(linearRgb);
+    } else if (u_ColorSpace == 11) {
+        colorSpaceCoord = rgbToYbl(linearRgb);
+    } else if (u_ColorSpace == 12) {
+        colorSpaceCoord = rgbToYgn(linearRgb);
     }
 
     // Apply affine decorrelation stretch: y = W * x + b
@@ -281,6 +318,10 @@ void main() {
         displayLinear = ybkToRgb(stretched);
     } else if (u_ColorSpace == 9) {
         displayLinear = yweToRgb(stretched);
+    } else if (u_ColorSpace == 11) {
+        displayLinear = yblToRgb(stretched);
+    } else if (u_ColorSpace == 12) {
+        displayLinear = ygnToRgb(stretched);
     }
 
     if (u_ColorSpace == 10) {

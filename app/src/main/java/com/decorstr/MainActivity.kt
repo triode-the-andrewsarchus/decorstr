@@ -63,6 +63,8 @@ class MainActivity : AppCompatActivity() {
         PresetItem(ColorSpace.YRD, "Red / Iron", "YRD"),
         PresetItem(ColorSpace.YRE, "Faint Reds", "YRE"),
         PresetItem(ColorSpace.YYE, "Yellows", "YYE"),
+        PresetItem(ColorSpace.YBL, "Blues", "YBL"),
+        PresetItem(ColorSpace.YGN, "Greens", "YGN"),
         PresetItem(ColorSpace.YBK, "Blacks", "YBK"),
         PresetItem(ColorSpace.YWE, "Whites", "YWE"),
         PresetItem(ColorSpace.YDT, "Yellow / Gen", "YDT"),

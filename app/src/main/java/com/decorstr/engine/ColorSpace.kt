@@ -10,6 +10,8 @@ enum class ColorSpace(val id: Int, val displayName: String, val chipText: String
     YWE(9, "YWE (Whites)", "YWE"),
     YDT(2, "YDT (General)", "YDT"),
     RGB0(10, "RGB0 (Zero Mean)", "RGB0"),
+    YBL(11, "YBL (Blues)", "YBL"),
+    YGN(12, "YGN (Greens)", "YGN"),
     DIRECT_PCA(3, "Direct PCA", "PCA"),
     RAW_NORMAL(4, "Normal RAW", "RAW");
 

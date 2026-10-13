@@ -165,6 +165,49 @@ Vec3 yweToLinearRgb(const Vec3& c) {
     return yuvToLinearRgb({y, u, v});
 }
 
+Vec3 linearRgbToYbl(const Vec3& rgb) {
+    Vec3 yuv = linearRgbToYuv(rgb);
+    float y = yuv.x;
+    // Boost positive U (Blue difference B - Y) by 3.0x, suppress red noise
+    float u = (yuv.y - 0.5f) * 3.0f + 0.5f;
+    float v = (yuv.z - 0.5f) * 0.7f + 0.5f;
+    return {y, u, v};
+}
+
+Vec3 yblToLinearRgb(const Vec3& c) {
+    float y = c.x;
+    float u = (c.y - 0.5f) / 3.0f + 0.5f;
+    float v = (c.z - 0.5f) / 0.7f + 0.5f;
+    return yuvToLinearRgb({y, u, v});
+}
+
+Vec3 linearRgbToYgn(const Vec3& rgb) {
+    Vec3 yuv = linearRgbToYuv(rgb);
+    float y = yuv.x;
+    float uc = yuv.y - 0.5f;
+    float vc = yuv.z - 0.5f;
+    // Pure Green unit vector in (u, v) is (-0.4892, -0.8721)
+    // Orthogonal vector is (0.8721, -0.4892)
+    float c_green = (-0.4892f * uc - 0.8721f * vc) * 2.5f;
+    float c_ortho = ( 0.8721f * uc - 0.4892f * vc) * 0.8f;
+    float u = -0.4892f * c_green + 0.8721f * c_ortho + 0.5f;
+    float v = -0.8721f * c_green - 0.4892f * c_ortho + 0.5f;
+    return {y, u, v};
+}
+
+Vec3 ygnToLinearRgb(const Vec3& c) {
+    float y = c.x;
+    float uc = c.y - 0.5f;
+    float vc = c.z - 0.5f;
+    float c_green = -0.4892f * uc - 0.8721f * vc;
+    float c_ortho =  0.8721f * uc - 0.4892f * vc;
+    float c_g_orig = c_green / 2.5f;
+    float c_o_orig = c_ortho / 0.8f;
+    float u = -0.4892f * c_g_orig + 0.8721f * c_o_orig + 0.5f;
+    float v = -0.8721f * c_g_orig - 0.4892f * c_o_orig + 0.5f;
+    return yuvToLinearRgb({y, u, v});
+}
+
 Vec3 convertRgbToSpace(const Vec3& rgb, ColorSpaceMode mode) {
     switch (mode) {
         case ColorSpaceMode::LAB:
@@ -181,6 +224,10 @@ Vec3 convertRgbToSpace(const Vec3& rgb, ColorSpaceMode mode) {
             return linearRgbToYbk(rgb);
         case ColorSpaceMode::YWE:
             return linearRgbToYwe(rgb);
+        case ColorSpaceMode::YBL:
+            return linearRgbToYbl(rgb);
+        case ColorSpaceMode::YGN:
+            return linearRgbToYgn(rgb);
         case ColorSpaceMode::CRGB:
         case ColorSpaceMode::RGB0:
         case ColorSpaceMode::DIRECT_PCA:
@@ -206,6 +253,10 @@ Vec3 convertSpaceToRgb(const Vec3& c, ColorSpaceMode mode) {
             return ybkToLinearRgb(c);
         case ColorSpaceMode::YWE:
             return yweToLinearRgb(c);
+        case ColorSpaceMode::YBL:
+            return yblToLinearRgb(c);
+        case ColorSpaceMode::YGN:
+            return ygnToLinearRgb(c);
         case ColorSpaceMode::CRGB:
         case ColorSpaceMode::RGB0:
         case ColorSpaceMode::DIRECT_PCA:
