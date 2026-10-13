@@ -52,6 +52,31 @@ class Matrix3x3(val data: FloatArray = FloatArray(9)) {
         return Matrix3x3(res)
     }
 
+    fun determinant(): Float {
+        return this[0, 0] * (this[1, 1] * this[2, 2] - this[1, 2] * this[2, 1]) -
+               this[0, 1] * (this[1, 0] * this[2, 2] - this[1, 2] * this[2, 0]) +
+               this[0, 2] * (this[1, 0] * this[2, 1] - this[1, 1] * this[2, 0])
+    }
+
+    fun inverse(): Matrix3x3? {
+        val det = determinant()
+        if (abs(det) < 1e-7f) return null
+        val invDet = 1.0f / det
+        val res = FloatArray(9)
+        res[0] = (this[1, 1] * this[2, 2] - this[1, 2] * this[2, 1]) * invDet
+        res[1] = (this[0, 2] * this[2, 1] - this[0, 1] * this[2, 2]) * invDet
+        res[2] = (this[0, 1] * this[1, 2] - this[0, 2] * this[1, 1]) * invDet
+
+        res[3] = (this[1, 2] * this[2, 0] - this[1, 0] * this[2, 2]) * invDet
+        res[4] = (this[0, 0] * this[2, 2] - this[0, 2] * this[2, 0]) * invDet
+        res[5] = (this[0, 2] * this[1, 0] - this[0, 0] * this[1, 2]) * invDet
+
+        res[6] = (this[1, 0] * this[2, 1] - this[1, 1] * this[2, 0]) * invDet
+        res[7] = (this[0, 1] * this[2, 0] - this[0, 0] * this[2, 1]) * invDet
+        res[8] = (this[0, 0] * this[1, 1] - this[0, 1] * this[1, 0]) * invDet
+        return Matrix3x3(res)
+    }
+
     companion object {
         fun identity(): Matrix3x3 = Matrix3x3(
             floatArrayOf(

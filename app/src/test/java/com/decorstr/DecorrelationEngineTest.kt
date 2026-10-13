@@ -160,4 +160,54 @@ class DecorrelationEngineTest {
         engine.updateFromCovariance(cov3, floatArrayOf(0.1f, 0.1f, 0.1f), ColorSpace.RGB_ZCA)
         assertEquals("Matrix must not change when locked", lockedMatrix0, engine.currentMatrix[0], 1e-6f)
     }
+
+    @Test
+    fun testMatrix3x3InverseAndDeterminant() {
+        val m = Matrix3x3(
+            floatArrayOf(
+                2.0f, 1.0f, 0.0f,
+                0.0f, 3.0f, 1.0f,
+                1.0f, 0.0f, 2.0f
+            )
+        )
+        // det = 2*(6-0) - 1*(0-1) + 0 = 12 + 1 = 13
+        assertEquals(13.0f, m.determinant(), 1e-5f)
+
+        val inv = m.inverse()
+        assertNotNull("Inverse should not be null", inv)
+        val prod = m * inv!!
+        val eye = Matrix3x3.identity()
+        for (i in 0..8) {
+            assertEquals("M * M^-1 must be identity", eye.data[i], prod.data[i], 1e-5f)
+        }
+    }
+
+    @Test
+    fun testGenericWhiteBalanceD65() {
+        // Standard D65 white point: X=0.95047, Y=1.00000, Z=1.08883
+        val d65 = Vec3(0.95047f, 1.00000f, 1.08883f)
+
+        // Typical generic Bayer color transform mapping XYZ -> Sensor
+        // where Green has ~2x quantum efficiency relative to Red and Blue
+        val ct = Matrix3x3(
+            floatArrayOf(
+                0.55f, 0.05f, -0.05f,
+                -0.10f, 1.15f, 0.05f,
+                -0.05f, 0.10f, 0.65f
+            )
+        )
+
+        val resp = ct * d65
+        assertTrue("Sensor R must be positive", resp.x > 0f)
+        assertTrue("Sensor G must be positive", resp.y > 0f)
+        assertTrue("Sensor B must be positive", resp.z > 0f)
+
+        val rGain = resp.y / resp.x
+        val bGain = resp.y / resp.z
+
+        // R gain should be ~1.8 - 2.5, B gain ~1.2 - 2.0
+        assertTrue("R gain should be within realistic Bayer range", rGain in 1.2f..3.5f)
+        assertTrue("B gain should be within realistic Bayer range", bGain in 1.1f..3.5f)
+    }
 }
+

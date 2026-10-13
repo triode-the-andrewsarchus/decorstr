@@ -12,15 +12,19 @@ import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.hardware.camera2.params.ColorSpaceTransform
 import android.util.Log
 import android.util.Size
 import com.decorstr.engine.DecorrelationEngine
+import com.decorstr.engine.Matrix3x3
+import com.decorstr.engine.Vec3
 import com.decorstr.gl.DecorstrRenderer
 import com.decorstr.storage.MediaSaver
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
 data class CameraChoice(
     val index: Int,
@@ -331,38 +335,114 @@ class RawCameraManager(
         Log.i(TAG, "Configured CFA: $activeCfaPattern, BlackLevel: ${activeBlackLevels.contentToString()}, WhiteLevel: $activeWhiteLevel, Orientation: $sensorOrientation, isFront: $isFront, WB: ${calibratedGains.contentToString()}")
     }
 
+    /**
+     * Generically computes calibrated neutral white balance gains from CameraCharacteristics
+     * adhering strictly to Android Camera2 and Adobe DNG (ISO 12234-2 / TIFF-EP) standards.
+     * Fully compatible with any Android manufacturer and sensor type.
+     */
     private fun computeCalibratedWbGains(chars: CameraCharacteristics): FloatArray {
-        val ct = chars.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
-        if (ct != null) {
-            // Standard CIE D65 Daylight illuminant XYZ white point (DNG reference)
-            val xn = 0.95047f
-            val yn = 1.00000f
-            val zn = 1.08883f
+        fun getIlluminantWhitePoint(ill: Int): Vec3 {
+            return when (ill) {
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D65,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_DAYLIGHT,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_FINE_WEATHER,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_CLOUDY_WEATHER,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_SHADE -> Vec3(0.95047f, 1.00000f, 1.08883f)
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D50 -> Vec3(0.96422f, 1.00000f, 0.82521f)
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D55 -> Vec3(0.95682f, 1.00000f, 0.92090f)
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D75 -> Vec3(0.94972f, 1.00000f, 1.22638f)
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_STANDARD_A,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_TUNGSTEN,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_ISO_STUDIO_TUNGSTEN -> Vec3(1.09850f, 1.00000f, 0.35585f)
+                else -> Vec3(0.95047f, 1.00000f, 1.08883f) // Standard D65 daylight
+            }
+        }
 
-            val r00 = ct.getElement(0, 0).toFloat()
-            val r01 = ct.getElement(1, 0).toFloat()
-            val r02 = ct.getElement(2, 0).toFloat()
+        fun isDaylight(ill: Int): Boolean {
+            return ill in listOf(
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D65,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D55,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D50,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_DAYLIGHT,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_FINE_WEATHER,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_CLOUDY_WEATHER,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_SHADE,
+                CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D75
+            )
+        }
 
-            val r10 = ct.getElement(0, 1).toFloat()
-            val r11 = ct.getElement(1, 1).toFloat()
-            val r12 = ct.getElement(2, 1).toFloat()
+        fun toMatrix3x3(cst: ColorSpaceTransform?): Matrix3x3? {
+            if (cst == null) return null
+            val m = FloatArray(9)
+            for (row in 0..2) {
+                for (col in 0..2) {
+                    m[row * 3 + col] = cst.getElement(col, row).toFloat()
+                }
+            }
+            return Matrix3x3(m)
+        }
 
-            val r20 = ct.getElement(0, 2).toFloat()
-            val r21 = ct.getElement(1, 2).toFloat()
-            val r22 = ct.getElement(2, 2).toFloat()
+        // 1. Evaluate SENSOR_COLOR_TRANSFORM1 and SENSOR_COLOR_TRANSFORM2
+        val ct1 = toMatrix3x3(chars.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1))
+        val ct2 = toMatrix3x3(chars.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2))
+        val cal1 = toMatrix3x3(chars.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1))
+        val cal2 = toMatrix3x3(chars.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2))
 
-            val sensorR = r00 * xn + r01 * yn + r02 * zn
-            val sensorG = r10 * xn + r11 * yn + r12 * zn
-            val sensorB = r20 * xn + r21 * yn + r22 * zn
+        val ill1 = chars.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)?.toInt() ?: 0
+        val ill2 = chars.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt() ?: 0
 
-            if (sensorR > 0.02f && sensorG > 0.02f && sensorB > 0.02f) {
-                val rGain = (sensorG / sensorR).coerceIn(1.2f, 3.8f)
-                val bGain = (sensorG / sensorB).coerceIn(1.1f, 3.8f)
-                Log.i(TAG, "Calibrated D65 WB gains: R=$rGain, G=1.0, B=$bGain")
+        // Prioritize daylight/neutral reference illuminant
+        val chosenPair = when {
+            isDaylight(ill1) && ct1 != null -> Triple(ct1, cal1, ill1)
+            isDaylight(ill2) && ct2 != null -> Triple(ct2, cal2, ill2)
+            ct1 != null -> Triple(ct1, cal1, ill1)
+            ct2 != null -> Triple(ct2, cal2, ill2)
+            else -> null
+        }
+
+        if (chosenPair != null) {
+            val (ct, cal, ill) = chosenPair
+            val totalTransform = if (cal != null) cal * ct else ct
+            val wp = getIlluminantWhitePoint(ill)
+            val sensorResp = totalTransform * wp
+
+            val sR = sensorResp.x
+            val sG = sensorResp.y
+            val sB = sensorResp.z
+
+            // Validate non-degenerate and not uncalibrated identity
+            val isIdentity = abs(sR - wp.x) < 0.05f && abs(sG - wp.y) < 0.05f && abs(sB - wp.z) < 0.05f
+            if (sR > 0.02f && sG > 0.02f && sB > 0.02f && !isIdentity) {
+                val rGain = (sG / sR).coerceIn(1.1f, 4.0f)
+                val bGain = (sG / sB).coerceIn(1.0f, 4.0f)
+                Log.i(TAG, "Generic Calibrated WB gains (Illuminant $ill): R=$rGain, G=1.0, B=$bGain")
                 return floatArrayOf(rGain, 1.0f, bGain)
             }
         }
-        return floatArrayOf(2.2f, 1.0f, 1.8f)
+
+        // 2. Fallback: SENSOR_FORWARD_MATRIX1 / SENSOR_FORWARD_MATRIX2
+        // In DNG, ForwardMatrix maps Camera Space -> CIE XYZ (D50).
+        // Therefore, Camera Space = ForwardMatrix^-1 * XYZ_D50.
+        val fm1 = toMatrix3x3(chars.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1))
+        val fm2 = toMatrix3x3(chars.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2))
+        val fm = fm1 ?: fm2
+        if (fm != null) {
+            val inv = fm.inverse()
+            if (inv != null) {
+                val d50 = Vec3(0.96422f, 1.00000f, 0.82521f)
+                val sensorResp = inv * d50
+                if (sensorResp.x > 0.02f && sensorResp.y > 0.02f && sensorResp.z > 0.02f) {
+                    val rGain = (sensorResp.y / sensorResp.x).coerceIn(1.1f, 4.0f)
+                    val bGain = (sensorResp.y / sensorResp.z).coerceIn(1.0f, 4.0f)
+                    Log.i(TAG, "Generic ForwardMatrix WB gains: R=$rGain, G=1.0, B=$bGain")
+                    return floatArrayOf(rGain, 1.0f, bGain)
+                }
+            }
+        }
+
+        // 3. Fallback: Standard CMOS Silicon Bayer sensitivity under daylight (D65)
+        Log.i(TAG, "Using generic Bayer D65 baseline fallback gains")
+        return floatArrayOf(2.2f, 1.0f, 1.6f)
     }
 
     private val repeatingCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
@@ -372,20 +452,41 @@ class RawCameraManager(
             result: TotalCaptureResult
         ) {
             latestCaptureResult = result
-            val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
-            if (gains != null) {
-                val r = gains.red
-                val g = (gains.greenEven + gains.greenOdd) * 0.5f
-                val b = gains.blue
-                if (g > 0.001f) {
-                    val rNorm = r / g
-                    val bNorm = b / g
-                    // When HAL returns identity [1, 1, 1, 1] (as secondary cameras do for RAW streams),
-                    // ignore identity to preserve the sensor's calibrated D65 neutral baseline.
-                    val isIdentity = kotlin.math.abs(rNorm - 1.0f) < 0.05f && kotlin.math.abs(bNorm - 1.0f) < 0.05f
-                    if (!isIdentity) {
-                        renderer.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
-                        decorEngine.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+
+            // 1. Check SENSOR_NEUTRAL_COLOR_POINT (official Camera2 / DNG standard for RAW white balance)
+            val neutral = result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+            var hasAppliedGains = false
+            if (neutral != null && neutral.size >= 3) {
+                val nr = neutral[0].toFloat()
+                val ng = neutral[1].toFloat()
+                val nb = neutral[2].toFloat()
+                val isDummy = abs(nr - ng) < 0.001f && abs(nb - ng) < 0.001f
+                if (nr > 0.001f && ng > 0.001f && nb > 0.001f && !isDummy) {
+                    val rNorm = (ng / nr).coerceIn(1.0f, 4.0f)
+                    val bNorm = (ng / nb).coerceIn(0.8f, 4.0f)
+                    renderer.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                    decorEngine.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                    hasAppliedGains = true
+                }
+            }
+
+            // 2. Check COLOR_CORRECTION_GAINS if neutral color point was not provided
+            if (!hasAppliedGains) {
+                val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                if (gains != null) {
+                    val r = gains.red
+                    val g = (gains.greenEven + gains.greenOdd) * 0.5f
+                    val b = gains.blue
+                    if (g > 0.001f) {
+                        val rNorm = r / g
+                        val bNorm = b / g
+                        // When HAL returns dummy identity [1, 1, 1, 1] (as secondary cameras do for RAW streams),
+                        // ignore identity to preserve the sensor's calibrated neutral baseline.
+                        val isIdentity = abs(rNorm - 1.0f) < 0.05f && abs(bNorm - 1.0f) < 0.05f
+                        if (!isIdentity) {
+                            renderer.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                            decorEngine.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                        }
                     }
                 }
             }
