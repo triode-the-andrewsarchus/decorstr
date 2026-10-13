@@ -13,6 +13,9 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
+import android.os.Build
 import android.util.Log
 import android.util.Size
 import com.decorstr.engine.DecorrelationEngine
@@ -22,16 +25,20 @@ import com.decorstr.gl.DecorstrRenderer
 import com.decorstr.storage.MediaSaver
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 data class CameraChoice(
     val index: Int,
-    val id: String,
+    val logicalId: String,
+    val physicalId: String? = null,
     val title: String,
     val subtitle: String
-)
+) {
+    val id: String get() = physicalId ?: logicalId
+}
 
 class RawCameraManager(
     private val context: Context,
@@ -79,8 +86,7 @@ class RawCameraManager(
         }
     }
 
-    // Available RAW camera IDs and choices
-    private val rawCameraIds = mutableListOf<String>()
+    // Available RAW camera choices
     val cameraChoices = mutableListOf<CameraChoice>()
     var currentCameraIndex = 0
         private set
@@ -105,73 +111,165 @@ class RawCameraManager(
     }
 
     private fun enumerateCameras() {
-        rawCameraIds.clear()
         cameraChoices.clear()
         try {
-            val candidates = mutableListOf<String>()
-            for (id in cameraManager.cameraIdList) {
-                val chars = cameraManager.getCameraCharacteristics(id)
-                val caps = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-                val hasRaw = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
-                if (hasRaw) {
-                    candidates.add(id)
+            data class RawCandidate(
+                val logicalId: String,
+                val physicalId: String?,
+                val chars: CameraCharacteristics,
+                val facing: Int,
+                val fl: Float,
+                val equiv35mm: Int,
+                val rank: Int
+            )
+
+            val candidates = mutableListOf<RawCandidate>()
+            val publicIds = cameraManager.cameraIdList
+            val seenPhysicalIds = mutableSetOf<String>()
+
+            // Find primary back camera focal length for zoom calculation
+            var mainBackEquiv = 24
+            for (id in publicIds) {
+                try {
+                    val chars = cameraManager.getCameraCharacteristics(id)
+                    val facing = chars.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
+                    if (facing == CameraCharacteristics.LENS_FACING_BACK) {
+                        val fl = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
+                        val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                        if (sensorSize != null && fl > 0f) {
+                            val diag = kotlin.math.sqrt(sensorSize.width * sensorSize.width + sensorSize.height * sensorSize.height)
+                            if (diag > 0.01f) {
+                                val eq = (fl * (43.27f / diag)).toInt()
+                                if (eq in 20..35) {
+                                    mainBackEquiv = eq
+                                    break
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            for (id in publicIds) {
+                try {
+                    val chars = cameraManager.getCameraCharacteristics(id)
+                    val caps = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+                    val hasRaw = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
+                    val isLogical = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
+                    val facing = chars.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
+                    val fl = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
+                    val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    val equiv35mm = if (sensorSize != null && fl > 0f) {
+                        val diag = kotlin.math.sqrt(sensorSize.width * sensorSize.width + sensorSize.height * sensorSize.height)
+                        if (diag > 0.01f) (fl * (43.27f / diag)).toInt() else 0
+                    } else 0
+
+                    if (hasRaw) {
+                        val rank = when {
+                            facing == CameraCharacteristics.LENS_FACING_BACK -> {
+                                when {
+                                    equiv35mm in 21..35 || (fl >= 3.0f && fl < 6.5f) -> 0 // Main 1x
+                                    equiv35mm in 1..20 || (fl > 0f && fl < 3.0f) -> 1    // Ultra-Wide 0.6x
+                                    equiv35mm > 35 || fl >= 6.5f -> 2                    // Telephoto 3x
+                                    else -> 3
+                                }
+                            }
+                            else -> 10
+                        }
+                        candidates.add(RawCandidate(id, null, chars, facing, fl, equiv35mm, rank))
+                    }
+
+                    // Check physical cameras if this is a logical multi-camera device
+                    if (isLogical) {
+                        val physIds = chars.physicalCameraIds
+                        for (pid in physIds) {
+                            if (publicIds.contains(pid)) continue // Already exposed as standalone public camera
+                            if (seenPhysicalIds.contains(pid)) continue
+
+                            try {
+                                val pChars = cameraManager.getCameraCharacteristics(pid)
+                                val pCaps = pChars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+                                val pHasRaw = pCaps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
+                                if (pHasRaw) {
+                                    val pFacing = pChars.get(CameraCharacteristics.LENS_FACING) ?: facing
+                                    val pFl = pChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
+                                    val pSensorSize = pChars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                                    val pEquiv = if (pSensorSize != null && pFl > 0f) {
+                                        val diag = kotlin.math.sqrt(pSensorSize.width * pSensorSize.width + pSensorSize.height * pSensorSize.height)
+                                        if (diag > 0.01f) (pFl * (43.27f / diag)).toInt() else 0
+                                    } else 0
+
+                                    // Skip if physical camera duplicates the parent logical camera's default sensor
+                                    if (abs(pFl - fl) < 0.2f && pFacing == facing) {
+                                        continue
+                                    }
+
+                                    val rank = when {
+                                        pFacing == CameraCharacteristics.LENS_FACING_BACK -> {
+                                            when {
+                                                pEquiv in 21..35 || (pFl >= 3.0f && pFl < 6.5f) -> 0
+                                                pEquiv in 1..20 || (pFl > 0f && pFl < 3.0f) -> 1
+                                                pEquiv > 35 || pFl >= 6.5f -> 2
+                                                else -> 3
+                                            }
+                                        }
+                                        else -> 10
+                                    }
+
+                                    seenPhysicalIds.add(pid)
+                                    candidates.add(RawCandidate(id, pid, pChars, pFacing, pFl, pEquiv, rank))
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed probing physical camera $pid of logical $id: ${e.message}")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error enumerating camera $id: ${e.message}")
                 }
             }
 
-            // Sort back cameras first, then front
-            candidates.sortBy { id ->
-                val chars = cameraManager.getCameraCharacteristics(id)
-                val facing = chars.get(CameraCharacteristics.LENS_FACING)
-                if (facing == CameraCharacteristics.LENS_FACING_BACK) 0 else 1
-            }
+            // Sort: Main 1x first, then Ultra-Wide, Telephoto, other back, then front
+            candidates.sortWith(compareBy({ it.rank }, { it.fl }, { it.logicalId }, { it.physicalId ?: "" }))
 
-            for ((idx, id) in candidates.withIndex()) {
-                val chars = cameraManager.getCameraCharacteristics(id)
-                val facing = chars.get(CameraCharacteristics.LENS_FACING)
-                val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                val fl = focalLengths?.firstOrNull() ?: 0f
-                val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-
-                val equiv35mm = if (sensorSize != null && fl > 0f) {
-                    val sensorDiag = kotlin.math.sqrt(sensorSize.width * sensorSize.width + sensorSize.height * sensorSize.height)
-                    if (sensorDiag > 0.01f) {
-                        (fl * (43.27f / sensorDiag)).toInt()
-                    } else 0
-                } else 0
-
+            for ((idx, cand) in candidates.withIndex()) {
                 val title: String
                 val subtitle: String
+                val displayId = cand.physicalId ?: cand.logicalId
 
-                if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                if (cand.facing == CameraCharacteristics.LENS_FACING_FRONT) {
                     title = "Front Camera"
-                    subtitle = "Camera $id • Selfie (RAW)"
+                    subtitle = "Camera $displayId • Selfie (RAW)"
                 } else {
                     when {
-                        equiv35mm in 1..20 || (fl > 0f && fl < 3.0f) -> {
+                        cand.equiv35mm in 1..20 || (cand.fl > 0f && cand.fl < 3.0f) -> {
                             title = "Ultra-Wide (0.6x)"
-                            subtitle = "Camera $id • ${if (equiv35mm > 0) "${equiv35mm}mm equiv" else "${fl}mm"}"
+                            subtitle = "Camera $displayId • ${if (cand.equiv35mm > 0) "${cand.equiv35mm}mm equiv" else "${cand.fl}mm"}"
                         }
-                        equiv35mm in 21..35 || (fl >= 3.0f && fl < 6.5f) -> {
+                        cand.equiv35mm in 21..35 || (cand.fl >= 3.0f && cand.fl < 6.5f) -> {
                             title = "Wide (1x) • Main"
-                            subtitle = "Camera $id • ${if (equiv35mm > 0) "${equiv35mm}mm equiv" else "${fl}mm"}"
+                            subtitle = "Camera $displayId • ${if (cand.equiv35mm > 0) "${cand.equiv35mm}mm equiv" else "${cand.fl}mm"}"
                         }
-                        equiv35mm > 35 || fl >= 6.5f -> {
-                            title = "Telephoto (3x)"
-                            subtitle = "Camera $id • ${if (equiv35mm > 0) "${equiv35mm}mm equiv" else "${fl}mm"}"
+                        cand.equiv35mm > 35 || cand.fl >= 6.5f -> {
+                            val zoomFactor = if (mainBackEquiv > 0 && cand.equiv35mm > 0) {
+                                val z = cand.equiv35mm.toFloat() / mainBackEquiv.toFloat()
+                                "${(z + 0.2f).toInt()}x"
+                            } else "3x"
+                            title = "Telephoto ($zoomFactor)"
+                            subtitle = "Camera $displayId • ${if (cand.equiv35mm > 0) "${cand.equiv35mm}mm equiv" else "${cand.fl}mm"}"
                         }
                         else -> {
-                            title = "Back Camera $id"
-                            subtitle = "Camera $id • RAW"
+                            title = "Back Camera $displayId"
+                            subtitle = "Camera $displayId • RAW"
                         }
                     }
                 }
 
-                rawCameraIds.add(id)
-                cameraChoices.add(CameraChoice(idx, id, title, subtitle))
-                Log.i(TAG, "Found RAW camera: id=$id title='$title' fl=${fl}mm equiv=${equiv35mm}mm")
+                cameraChoices.add(CameraChoice(idx, cand.logicalId, cand.physicalId, title, subtitle))
+                Log.i(TAG, "Registered RAW camera #$idx: logical=${cand.logicalId} physical=${cand.physicalId} title='$title' sub='$subtitle'")
             }
 
-            Log.i(TAG, "Total RAW cameras available: ${rawCameraIds.size}")
+            Log.i(TAG, "Total RAW cameras available: ${cameraChoices.size}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed enumerating cameras", e)
         }
@@ -182,8 +280,9 @@ class RawCameraManager(
         isStarted = true
         backgroundHandler?.post {
             if (isStarted && cameraDevice == null) {
-                if (rawCameraIds.isNotEmpty()) {
-                    openCameraInternal(rawCameraIds[currentCameraIndex])
+                val choice = cameraChoices.getOrNull(currentCameraIndex)
+                if (choice != null) {
+                    openCameraInternal(choice)
                 } else {
                     Log.e(TAG, "No RAW-capable cameras available on device!")
                 }
@@ -208,34 +307,42 @@ class RawCameraManager(
     }
 
     fun selectCamera(index: Int) {
-        if (index !in rawCameraIds.indices || index == currentCameraIndex) return
+        if (index !in cameraChoices.indices || index == currentCameraIndex) return
         currentCameraIndex = index
         backgroundHandler?.post {
             closeCameraInternal()
             if (isStarted) {
-                openCameraInternal(rawCameraIds[currentCameraIndex])
+                val choice = cameraChoices.getOrNull(currentCameraIndex)
+                if (choice != null) {
+                    openCameraInternal(choice)
+                }
             }
         }
     }
 
     fun switchCamera() {
-        if (rawCameraIds.size <= 1) return
-        selectCamera((currentCameraIndex + 1) % rawCameraIds.size)
+        if (cameraChoices.size <= 1) return
+        selectCamera((currentCameraIndex + 1) % cameraChoices.size)
     }
 
     @SuppressLint("MissingPermission")
-    private fun openCameraInternal(cameraId: String) {
+    private fun openCameraInternal(choice: CameraChoice) {
         if (!isStarted) return
         if (cameraDevice != null) {
             Log.w(TAG, "Camera already open: ${cameraDevice?.id}")
             return
         }
         try {
-            val chars = cameraManager.getCameraCharacteristics(cameraId)
+            val logicalChars = cameraManager.getCameraCharacteristics(choice.logicalId)
+            val chars = if (choice.physicalId != null) {
+                cameraManager.getCameraCharacteristics(choice.physicalId)
+            } else {
+                logicalChars
+            }
             activeCharacteristics = chars
             inspectAndConfigureMetadata(chars)
 
-            cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+            cameraManager.openCamera(choice.logicalId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     if (!isStarted) {
                         Log.i(TAG, "Camera opened after stop, closing immediately: ${camera.id}")
@@ -254,7 +361,7 @@ class RawCameraManager(
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
-                    Log.e(TAG, "Camera error: $error on camera $cameraId")
+                    Log.e(TAG, "Camera error: $error on camera ${choice.id} (logical ${choice.logicalId})")
                     camera.close()
                     cameraDevice = null
                     // Retry once after 300ms if error was due to temporary background/busy state
@@ -264,22 +371,22 @@ class RawCameraManager(
                                      error == ERROR_MAX_CAMERAS_IN_USE)) {
                         backgroundHandler?.postDelayed({
                             if (isStarted && cameraDevice == null) {
-                                Log.i(TAG, "Retrying open camera $cameraId after error $error")
-                                openCameraInternal(cameraId)
+                                Log.i(TAG, "Retrying open camera ${choice.id} after error $error")
+                                openCameraInternal(choice)
                             }
                         }, 300)
                     }
                 }
             }, backgroundHandler)
         } catch (e: CameraAccessException) {
-            Log.w(TAG, "CameraAccessException opening camera $cameraId: ${e.message}, retrying in 300ms")
+            Log.w(TAG, "CameraAccessException opening camera ${choice.id}: ${e.message}, retrying in 300ms")
             backgroundHandler?.postDelayed({
                 if (isStarted && cameraDevice == null) {
-                    openCameraInternal(cameraId)
+                    openCameraInternal(choice)
                 }
             }, 300)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to open camera $cameraId", e)
+            Log.e(TAG, "Failed to open camera ${choice.id}", e)
         }
     }
 
@@ -453,8 +560,15 @@ class RawCameraManager(
         ) {
             latestCaptureResult = result
 
+            val currentChoice = cameraChoices.getOrNull(currentCameraIndex)
+            val effectiveResult: CaptureResult = if (currentChoice?.physicalId != null) {
+                result.physicalCameraResults[currentChoice.physicalId] ?: result
+            } else {
+                result
+            }
+
             // 1. Check SENSOR_NEUTRAL_COLOR_POINT (official Camera2 / DNG standard for RAW white balance)
-            val neutral = result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+            val neutral = effectiveResult.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT) ?: result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
             var hasAppliedGains = false
             if (neutral != null && neutral.size >= 3) {
                 val nr = neutral[0].toFloat()
@@ -472,7 +586,7 @@ class RawCameraManager(
 
             // 2. Check COLOR_CORRECTION_GAINS if neutral color point was not provided
             if (!hasAppliedGains) {
-                val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                val gains = effectiveResult.get(CaptureResult.COLOR_CORRECTION_GAINS) ?: result.get(CaptureResult.COLOR_CORRECTION_GAINS)
                 if (gains != null) {
                     val r = gains.red
                     val g = (gains.greenEven + gains.greenOdd) * 0.5f
@@ -628,6 +742,9 @@ class RawCameraManager(
     private fun createCaptureSession() {
         val device = cameraDevice ?: return
         if (!isStarted) return
+        val currentChoice = cameraChoices.getOrNull(currentCameraIndex) ?: return
+        val physicalId = currentChoice.physicalId
+
         try {
             imageReader?.close()
             imageReader = ImageReader.newInstance(
@@ -651,32 +768,71 @@ class RawCameraManager(
             }
             previewRequestBuilder = requestBuilder
 
-            device.createCaptureSession(
-                listOf(surface),
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        if (!isStarted || cameraDevice == null) {
-                            session.close()
-                            return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val outputConfig = OutputConfiguration(surface)
+                if (physicalId != null) {
+                    outputConfig.setPhysicalCameraId(physicalId)
+                    Log.i(TAG, "Configured OutputConfiguration for physical camera ID: $physicalId")
+                }
+                val executor = Executor { command -> backgroundHandler?.post(command) }
+                val sessionConfig = SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    listOf(outputConfig),
+                    executor,
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: CameraCaptureSession) {
+                            if (!isStarted || cameraDevice == null) {
+                                session.close()
+                                return
+                            }
+                            captureSession = session
+                            try {
+                                session.setRepeatingRequest(
+                                    requestBuilder.build(),
+                                    repeatingCaptureCallback,
+                                    backgroundHandler
+                                )
+                                Log.i(TAG, "Capture session active for ${currentChoice.title}")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to start repeating request", e)
+                            }
                         }
-                        captureSession = session
-                        try {
-                            session.setRepeatingRequest(
-                                requestBuilder.build(),
-                                repeatingCaptureCallback,
-                                backgroundHandler
-                            )
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to start repeating request", e)
-                        }
-                    }
 
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Log.e(TAG, "Capture session configuration failed")
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                            Log.e(TAG, "Capture session configuration failed for ${currentChoice.title}")
+                        }
                     }
-                },
-                backgroundHandler
-            )
+                )
+                device.createCaptureSession(sessionConfig)
+            } else {
+                @Suppress("DEPRECATION")
+                device.createCaptureSession(
+                    listOf(surface),
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: CameraCaptureSession) {
+                            if (!isStarted || cameraDevice == null) {
+                                session.close()
+                                return
+                            }
+                            captureSession = session
+                            try {
+                                session.setRepeatingRequest(
+                                    requestBuilder.build(),
+                                    repeatingCaptureCallback,
+                                    backgroundHandler
+                                )
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to start repeating request", e)
+                            }
+                        }
+
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                            Log.e(TAG, "Capture session configuration failed")
+                        }
+                    },
+                    backgroundHandler
+                )
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed creating capture session", e)
         }
