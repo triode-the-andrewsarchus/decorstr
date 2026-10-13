@@ -63,11 +63,13 @@ WhiteningResult WhiteningEngine::updateAndCompute(
     std::memcpy(mPrevEigenvectors, eigen.eigenvectors, sizeof(mPrevEigenvectors));
     std::memcpy(res.eigenvalues, eigen.eigenvalues, sizeof(res.eigenvalues));
 
-    // 3. Whitening scales
+    // 3. Whitening scales (capped to prevent extreme eigenvalue noise amplification)
     float S[3];
-    constexpr float EPS = 1e-6f;
+    constexpr float MIN_LAMBDA = 0.0002f;
+    constexpr float MAX_SCALE = 16.0f;
     for (int i = 0; i < 3; ++i) {
-        S[i] = targetSigma / std::sqrt(std::max(eigen.eigenvalues[i], EPS));
+        float scale = targetSigma / std::sqrt(std::max(eigen.eigenvalues[i], MIN_LAMBDA));
+        S[i] = std::min(scale, MAX_SCALE);
     }
 
     // 4. Matrix Synthesis

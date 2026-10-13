@@ -93,7 +93,8 @@
             android:id="@+id/chipGroupPresets"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            app:singleSelection="true">
+            app:singleSelection="true"
+            app:selectionRequired="true">
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipLab"
@@ -102,8 +103,8 @@
                 android:layout_height="wrap_content"
                 android:checked="true"
                 android:text="@string/preset_lab"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipCrgb"
@@ -111,8 +112,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_crgb"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipYrd"
@@ -120,8 +121,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_yrd"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipYre"
@@ -129,8 +130,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_yre"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipYye"
@@ -138,8 +139,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_yye"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipYbk"
@@ -147,8 +148,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_ybk"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipYwe"
@@ -156,8 +157,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_ywe"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipYdt"
@@ -165,8 +166,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_ydt"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipRgb0"
@@ -174,8 +175,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_rgb0"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipPca"
@@ -183,8 +184,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_pca"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/chipNormal"
@@ -192,8 +193,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/preset_normal"
-                android:textColor="@color/white"
-                app:chipBackgroundColor="@color/dark_gray" />
+                android:textColor="@color/chip_text_selector"
+                app:chipBackgroundColor="@color/chip_background_selector" />
         </com.google.android.material.chip.ChipGroup>
     </HorizontalScrollView>
 
@@ -296,4 +297,32 @@
         </LinearLayout>
     </androidx.cardview.widget.CardView>
 
+    <!-- In-App Notification Banner (positioned well above bottom controls in preview) -->
+    <androidx.cardview.widget.CardView
+        android:id="@+id/bannerNotification"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="24dp"
+        android:visibility="gone"
+        app:cardCornerRadius="20dp"
+        app:cardBackgroundColor="#D0181818"
+        app:cardElevation="8dp"
+        app:layout_constraintBottom_toTopOf="@id/bottomControlsCard"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <TextView
+            android:id="@+id/tvBannerText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="10dp"
+            android:textColor="@color/white"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:text="" />
+    </androidx.cardview.widget.CardView>
+
 </androidx.constraintlayout.widget.ConstraintLayout>
+

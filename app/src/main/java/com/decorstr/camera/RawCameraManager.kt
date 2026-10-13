@@ -322,7 +322,47 @@ class RawCameraManager(
         val isFront = (lensFacing == CameraCharacteristics.LENS_FACING_FRONT)
         renderer.setOrientation(sensorOrientation, isFront)
 
-        Log.i(TAG, "Configured CFA: $activeCfaPattern, BlackLevel: ${activeBlackLevels.contentToString()}, WhiteLevel: $activeWhiteLevel, Orientation: $sensorOrientation, isFront: $isFront")
+        // Compute per-camera calibrated neutral white balance gains from SENSOR_COLOR_TRANSFORM_1
+        val calibratedGains = computeCalibratedWbGains(chars)
+        renderer.resetWhiteBalanceGains(calibratedGains[0], 1.0f, calibratedGains[2])
+        decorEngine.resetWhiteBalanceGains(calibratedGains[0], 1.0f, calibratedGains[2])
+        decorEngine.reset()
+
+        Log.i(TAG, "Configured CFA: $activeCfaPattern, BlackLevel: ${activeBlackLevels.contentToString()}, WhiteLevel: $activeWhiteLevel, Orientation: $sensorOrientation, isFront: $isFront, WB: ${calibratedGains.contentToString()}")
+    }
+
+    private fun computeCalibratedWbGains(chars: CameraCharacteristics): FloatArray {
+        val ct = chars.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
+        if (ct != null) {
+            // Standard CIE D65 Daylight illuminant XYZ white point (DNG reference)
+            val xn = 0.95047f
+            val yn = 1.00000f
+            val zn = 1.08883f
+
+            val r00 = ct.getElement(0, 0).toFloat()
+            val r01 = ct.getElement(1, 0).toFloat()
+            val r02 = ct.getElement(2, 0).toFloat()
+
+            val r10 = ct.getElement(0, 1).toFloat()
+            val r11 = ct.getElement(1, 1).toFloat()
+            val r12 = ct.getElement(2, 1).toFloat()
+
+            val r20 = ct.getElement(0, 2).toFloat()
+            val r21 = ct.getElement(1, 2).toFloat()
+            val r22 = ct.getElement(2, 2).toFloat()
+
+            val sensorR = r00 * xn + r01 * yn + r02 * zn
+            val sensorG = r10 * xn + r11 * yn + r12 * zn
+            val sensorB = r20 * xn + r21 * yn + r22 * zn
+
+            if (sensorR > 0.02f && sensorG > 0.02f && sensorB > 0.02f) {
+                val rGain = (sensorG / sensorR).coerceIn(1.2f, 3.8f)
+                val bGain = (sensorG / sensorB).coerceIn(1.1f, 3.8f)
+                Log.i(TAG, "Calibrated D65 WB gains: R=$rGain, G=1.0, B=$bGain")
+                return floatArrayOf(rGain, 1.0f, bGain)
+            }
+        }
+        return floatArrayOf(2.2f, 1.0f, 1.8f)
     }
 
     private val repeatingCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
@@ -340,8 +380,13 @@ class RawCameraManager(
                 if (g > 0.001f) {
                     val rNorm = r / g
                     val bNorm = b / g
-                    renderer.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
-                    decorEngine.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                    // When HAL returns identity [1, 1, 1, 1] (as secondary cameras do for RAW streams),
+                    // ignore identity to preserve the sensor's calibrated D65 neutral baseline.
+                    val isIdentity = kotlin.math.abs(rNorm - 1.0f) < 0.05f && kotlin.math.abs(bNorm - 1.0f) < 0.05f
+                    if (!isIdentity) {
+                        renderer.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                        decorEngine.setWhiteBalanceGains(rNorm, 1.0f, bNorm)
+                    }
                 }
             }
 
@@ -501,6 +546,7 @@ class RawCameraManager(
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
             }
             previewRequestBuilder = requestBuilder
 

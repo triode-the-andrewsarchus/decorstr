@@ -99,6 +99,14 @@ class DecorstrRenderer(
         }
     }
 
+    fun resetWhiteBalanceGains(r: Float, g: Float, b: Float) {
+        synchronized(frameLock) {
+            whiteBalanceGains[0] = r
+            whiteBalanceGains[1] = g
+            whiteBalanceGains[2] = b
+        }
+    }
+
     @Volatile var currentScaleX = 1.0f
         private set
     @Volatile var currentScaleY = 1.0f
@@ -525,6 +533,16 @@ class DecorstrRenderer(
             System.arraycopy(pixels, top, rowBuffer, 0, targetW)
             System.arraycopy(pixels, bottom, pixels, top, targetW)
             System.arraycopy(rowBuffer, 0, pixels, bottom, targetW)
+        }
+
+        // glReadPixels packed GL_RGBA into little-endian Int as 0xAABBGGRR.
+        // Bitmap.Config.ARGB_8888 expects 0xAARRGGBB, so swap Red (bits 0..7) and Blue (bits 16..23)
+        // to ensure captured photos precisely match preview colors instead of inverted hues.
+        for (i in pixels.indices) {
+            val c = pixels[i]
+            val r = c and 0xFF
+            val b = (c ushr 16) and 0xFF
+            pixels[i] = (c and -0xff0100) or (r shl 16) or b
         }
 
         val bitmap = Bitmap.createBitmap(pixels, targetW, targetH, Bitmap.Config.ARGB_8888)

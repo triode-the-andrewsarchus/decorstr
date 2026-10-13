@@ -31,40 +31,75 @@ float getCalibratedVal(ivec2 p, float bl) {
     return clamp((rawVal - bl) / normRange, 0.0, 1.0);
 }
 
-// Fast 2x2 Bayer demosaic: 4 fetches per quad, completely branch-free and robust
-vec3 demosaicQuad(ivec2 p, int pattern) {
-    ivec2 maxCoord = ivec2(u_TextureSize) - ivec2(2, 2);
-    ivec2 q = clamp(p & (~1), ivec2(0, 0), maxCoord);
+// Full-resolution continuous Bilinear Bayer Demosaic
+// Reconstructs true full 12MP resolution at each sensor site without 2x2 blocking,
+// halving high-frequency shot noise by smooth cross-averaging.
+vec3 demosaicBilinear(ivec2 p, int pattern) {
+    ivec2 maxCoord = ivec2(u_TextureSize) - ivec2(1, 1);
+    ivec2 c = clamp(p, ivec2(0, 0), maxCoord);
 
-    float p00 = getCalibratedVal(q, u_BlackLevel.x);
-    float p10 = getCalibratedVal(q + ivec2(1, 0), u_BlackLevel.y);
-    float p01 = getCalibratedVal(q + ivec2(0, 1), u_BlackLevel.z);
-    float p11 = getCalibratedVal(q + ivec2(1, 1), u_BlackLevel.w);
+    // Shifts to normalize CFA to RGGB layout: 0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR
+    ivec2 shift = ivec2(0, 0);
+    if (pattern == 1) shift = ivec2(1, 0);
+    else if (pattern == 2) shift = ivec2(0, 1);
+    else if (pattern == 3) shift = ivec2(1, 1);
+
+    ivec2 bPos = (c + shift) & 1; // 0,0=R, 1,0=Gr, 0,1=Gb, 1,1=B
+
+    float center = getCalibratedVal(c, u_BlackLevel[((c.y & 1) << 1) | (c.x & 1)]);
+
+    ivec2 cLeft  = clamp(c + ivec2(-1, 0), ivec2(0, 0), maxCoord);
+    ivec2 cRight = clamp(c + ivec2( 1, 0), ivec2(0, 0), maxCoord);
+    ivec2 cUp    = clamp(c + ivec2(0, -1), ivec2(0, 0), maxCoord);
+    ivec2 cDown  = clamp(c + ivec2(0,  1), ivec2(0, 0), maxCoord);
+
+    float valL = getCalibratedVal(cLeft,  u_BlackLevel[((cLeft.y  & 1) << 1) | (cLeft.x  & 1)]);
+    float valR = getCalibratedVal(cRight, u_BlackLevel[((cRight.y & 1) << 1) | (cRight.x & 1)]);
+    float valU = getCalibratedVal(cUp,    u_BlackLevel[((cUp.y    & 1) << 1) | (cUp.x    & 1)]);
+    float valD = getCalibratedVal(cDown,  u_BlackLevel[((cDown.y  & 1) << 1) | (cDown.x  & 1)]);
 
     float r = 0.0;
     float g = 0.0;
     float b = 0.0;
 
-    if (pattern == 0) {
-        // RGGB
-        r = p00;
-        g = (p10 + p01) * 0.5;
-        b = p11;
-    } else if (pattern == 1) {
-        // GRBG
-        r = p10;
-        g = (p00 + p11) * 0.5;
-        b = p01;
-    } else if (pattern == 2) {
-        // GBRG
-        r = p01;
-        g = (p00 + p11) * 0.5;
-        b = p10;
+    if (bPos.x == 0 && bPos.y == 0) {
+        // Center is RED
+        r = center;
+        g = (valL + valR + valU + valD) * 0.25;
+
+        ivec2 cTL = clamp(c + ivec2(-1, -1), ivec2(0, 0), maxCoord);
+        ivec2 cTR = clamp(c + ivec2( 1, -1), ivec2(0, 0), maxCoord);
+        ivec2 cBL = clamp(c + ivec2(-1,  1), ivec2(0, 0), maxCoord);
+        ivec2 cBR = clamp(c + ivec2( 1,  1), ivec2(0, 0), maxCoord);
+        float valTL = getCalibratedVal(cTL, u_BlackLevel[((cTL.y & 1) << 1) | (cTL.x & 1)]);
+        float valTR = getCalibratedVal(cTR, u_BlackLevel[((cTR.y & 1) << 1) | (cTR.x & 1)]);
+        float valBL = getCalibratedVal(cBL, u_BlackLevel[((cBL.y & 1) << 1) | (cBL.x & 1)]);
+        float valBR = getCalibratedVal(cBR, u_BlackLevel[((cBR.y & 1) << 1) | (cBR.x & 1)]);
+        b = (valTL + valTR + valBL + valBR) * 0.25;
+    } else if (bPos.x == 1 && bPos.y == 1) {
+        // Center is BLUE
+        b = center;
+        g = (valL + valR + valU + valD) * 0.25;
+
+        ivec2 cTL = clamp(c + ivec2(-1, -1), ivec2(0, 0), maxCoord);
+        ivec2 cTR = clamp(c + ivec2( 1, -1), ivec2(0, 0), maxCoord);
+        ivec2 cBL = clamp(c + ivec2(-1,  1), ivec2(0, 0), maxCoord);
+        ivec2 cBR = clamp(c + ivec2( 1,  1), ivec2(0, 0), maxCoord);
+        float valTL = getCalibratedVal(cTL, u_BlackLevel[((cTL.y & 1) << 1) | (cTL.x & 1)]);
+        float valTR = getCalibratedVal(cTR, u_BlackLevel[((cTR.y & 1) << 1) | (cTR.x & 1)]);
+        float valBL = getCalibratedVal(cBL, u_BlackLevel[((cBL.y & 1) << 1) | (cBL.x & 1)]);
+        float valBR = getCalibratedVal(cBR, u_BlackLevel[((cBR.y & 1) << 1) | (cBR.x & 1)]);
+        r = (valTL + valTR + valBL + valBR) * 0.25;
+    } else if (bPos.x == 1 && bPos.y == 0) {
+        // Center is GREEN on RED row (left/right are RED, up/down are BLUE)
+        g = center;
+        r = (valL + valR) * 0.5;
+        b = (valU + valD) * 0.5;
     } else {
-        // BGGR
-        r = p11;
-        g = (p10 + p01) * 0.5;
-        b = p00;
+        // Center is GREEN on BLUE row (left/right are BLUE, up/down are RED)
+        g = center;
+        b = (valL + valR) * 0.5;
+        r = (valU + valD) * 0.5;
     }
 
     // Apply Auto White Balance Gains
@@ -202,7 +237,7 @@ void main() {
     }
 
     ivec2 pixelCoord = ivec2(v_TexCoord * u_TextureSize);
-    vec3 linearRgb = demosaicQuad(pixelCoord, u_CfaPattern);
+    vec3 linearRgb = demosaicBilinear(pixelCoord, u_CfaPattern);
 
     if (u_ColorSpace == 4) {
         float invGamma = 1.0 / max(0.1, u_Gamma);

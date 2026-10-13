@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -14,10 +16,10 @@ import android.widget.Button
 import android.widget.RadioButton
 import android.widget.SeekBar
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.ListPopupWindow
+import androidx.cardview.widget.CardView
 import androidx.core.content.ContextCompat
 import com.decorstr.camera.CameraChoice
 import com.decorstr.camera.RawCameraManager
@@ -42,6 +44,8 @@ class MainActivity : AppCompatActivity() {
 
     private var lastFps = 0.0f
     private var lastStableState = false
+    private var bannerHideRunnable: Runnable? = null
+    private val bannerHandler = Handler(Looper.getMainLooper())
 
     private lateinit var tvStatus: TextView
     private lateinit var tvSmoothingLabel: TextView
@@ -60,7 +64,7 @@ class MainActivity : AppCompatActivity() {
         if (isGranted) {
             cameraManager.start()
         } else {
-            Toast.makeText(this, "Camera permission is required for real-time RAW preview", Toast.LENGTH_LONG).show()
+            showBannerToast("Camera permission is required for real-time RAW preview", isLong = true)
         }
     }
 
@@ -121,7 +125,7 @@ class MainActivity : AppCompatActivity() {
                 renderer.toggleAspect()
                 btnAspect.text = if (renderer.isAspectFill) "FILL" else "FIT"
                 val mode = if (renderer.isAspectFill) "Fill (Crop)" else "Fit (Letterbox)"
-                Toast.makeText(this, "Aspect: $mode", Toast.LENGTH_SHORT).show()
+                showBannerToast("Aspect: $mode")
             }
         }
 
@@ -180,7 +184,6 @@ class MainActivity : AppCompatActivity() {
             if (preset != ColorSpace.RAW_NORMAL) {
                 decorEngine.reset()
             }
-            Toast.makeText(this, preset.displayName, Toast.LENGTH_SHORT).show()
         }
 
         // Temporal Smoothing Slider (1 to 100 -> 0.01 to 1.0)
@@ -230,32 +233,60 @@ class MainActivity : AppCompatActivity() {
             renderer.toggleAspect()
             btnAspect.text = if (renderer.isAspectFill) "FILL" else "FIT"
             val mode = if (renderer.isAspectFill) "Fill (Crop)" else "Fit (Letterbox)"
-            Toast.makeText(this, "Aspect: $mode", Toast.LENGTH_SHORT).show()
+            showBannerToast("Aspect: $mode")
         }
 
         // Capture still image (Full-resolution Decorrelated JPEG + RAW DNG)
         btnCapture.setOnClickListener {
             btnCapture.isEnabled = false
-            Toast.makeText(this, "Capturing 12MP Photo + RAW DNG...", Toast.LENGTH_SHORT).show()
+            showBannerToast("Capturing 12MP Photo + RAW DNG...")
             cameraManager.captureStill { jpegUri, dngUri ->
                 runOnUiThread {
                     btnCapture.isEnabled = true
                     if (jpegUri != null && dngUri != null) {
-                        Toast.makeText(this, "Saved Photo & DNG to Pictures/Decorstr!", Toast.LENGTH_LONG).show()
+                        showBannerToast("Saved Photo & DNG to Pictures/Decorstr!", isLong = true)
                     } else if (jpegUri != null) {
-                        Toast.makeText(this, "Saved Photo to Pictures/Decorstr!", Toast.LENGTH_LONG).show()
+                        showBannerToast("Saved Photo to Pictures/Decorstr!", isLong = true)
                     } else {
-                        Toast.makeText(this, "Capture failed, try again", Toast.LENGTH_SHORT).show()
+                        showBannerToast("Capture failed, try again")
                     }
                 }
             }
         }
     }
 
+    private fun showBannerToast(message: String, isLong: Boolean = false) {
+        val banner = findViewById<CardView>(R.id.bannerNotification) ?: return
+        val tvBanner = findViewById<TextView>(R.id.tvBannerText) ?: return
+
+        bannerHideRunnable?.let { bannerHandler.removeCallbacks(it) }
+
+        tvBanner.text = message
+        banner.alpha = 0f
+        banner.visibility = View.VISIBLE
+        banner.animate()
+            .alpha(1f)
+            .setDuration(150)
+            .start()
+
+        val delayMs = if (isLong) 3000L else 1800L
+        val runnable = Runnable {
+            banner.animate()
+                .alpha(0f)
+                .setDuration(250)
+                .withEndAction {
+                    banner.visibility = View.GONE
+                }
+                .start()
+        }
+        bannerHideRunnable = runnable
+        bannerHandler.postDelayed(runnable, delayMs)
+    }
+
     private fun showCameraDropdown() {
         val choices = cameraManager.cameraChoices
         if (choices.isEmpty()) {
-            Toast.makeText(this, "No RAW cameras available", Toast.LENGTH_SHORT).show()
+            showBannerToast("No RAW cameras available")
             return
         }
 
@@ -291,7 +322,7 @@ class MainActivity : AppCompatActivity() {
                     focusRingView.hide()
                     cameraManager.selectCamera(position)
                     val chosen = choices[position]
-                    Toast.makeText(this@MainActivity, "Switched to ${chosen.title}", Toast.LENGTH_SHORT).show()
+                    showBannerToast("Switched to ${chosen.title}")
                 }
             }
         }

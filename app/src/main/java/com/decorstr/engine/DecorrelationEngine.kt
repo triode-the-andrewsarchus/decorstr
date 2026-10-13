@@ -49,6 +49,14 @@ class DecorrelationEngine {
         }
     }
 
+    fun resetWhiteBalanceGains(r: Float, g: Float, b: Float) {
+        synchronized(this) {
+            whiteBalanceGains[0] = r
+            whiteBalanceGains[1] = g
+            whiteBalanceGains[2] = b
+        }
+    }
+
     /**
      * Process RAW16 (ImageFormat.RAW_SENSOR) frame.
      * Updates [currentMatrix], [currentBias], and [currentEigenvalues].
@@ -159,9 +167,9 @@ class DecorrelationEngine {
         prevEigenvectors = V.clone()
         System.arraycopy(lambdas, 0, currentEigenvalues, 0, 3)
 
-        // Whitening scale: s_i = targetSigma / sqrt(max(λ_i, 1e-6))
+        // Whitening scale: s_i = min(16.0, targetSigma / sqrt(max(λ_i, 2e-4)))
         val S = FloatArray(3) { i ->
-            targetSigma / sqrt(max(lambdas[i], 1e-6f))
+            (targetSigma / sqrt(max(lambdas[i], 0.0002f))).coerceAtMost(16.0f)
         }
 
         if (colorSpace == ColorSpace.DIRECT_PCA) {
