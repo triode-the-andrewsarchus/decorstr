@@ -2,6 +2,9 @@ package com.decorstr
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.app.Dialog
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -10,6 +13,7 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowManager
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -56,7 +60,7 @@ class MainActivity : AppCompatActivity() {
     private val presetList = listOf(
         PresetItem(ColorSpace.LAB, "General", "LAB"),
         PresetItem(ColorSpace.CRGB, "Reds", "CRGB"),
-        PresetItem(ColorSpace.YRD, "Red Ochre", "YRD"),
+        PresetItem(ColorSpace.YRD, "Red / Iron", "YRD"),
         PresetItem(ColorSpace.YRE, "Faint Reds", "YRE"),
         PresetItem(ColorSpace.YYE, "Yellows", "YYE"),
         PresetItem(ColorSpace.YBK, "Blacks", "YBK"),
@@ -204,6 +208,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupControls() {
+        findViewById<View>(R.id.tvTitle).setOnClickListener {
+            showHelpDialog()
+        }
+
         btnAspect.text = if (renderer.isAspectFill) "FILL" else "FIT"
 
         // Preset selector pills (Top: Main purpose / what it's good at, Bottom: Technical code)
@@ -377,6 +385,28 @@ class MainActivity : AppCompatActivity() {
         }
         cameraDropdown = popup
         popup.show()
+    }
+
+    private fun showHelpDialog() {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.setContentView(R.layout.dialog_help)
+        dialog.window?.let { window ->
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            val displayMetrics = resources.displayMetrics
+            val width = (displayMetrics.widthPixels * 0.92).toInt()
+            val height = (displayMetrics.heightPixels * 0.85).toInt()
+            window.setLayout(width, height)
+        }
+
+        dialog.findViewById<View>(R.id.btnHelpClose)?.setOnClickListener {
+            dialog.dismiss()
+        }
+        dialog.findViewById<View>(R.id.btnHelpOk)?.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialog.show()
     }
 
     override fun onResume() {
