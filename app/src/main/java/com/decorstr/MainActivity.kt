@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.SeekBar
 import android.widget.TextView
@@ -30,7 +31,12 @@ import com.decorstr.gl.DecorstrRenderer
 import com.decorstr.sensors.StabilityTracker
 import com.decorstr.ui.FocusRingView
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.chip.ChipGroup
+
+data class PresetItem(
+    val colorSpace: ColorSpace,
+    val targetDescription: String,
+    val code: String
+)
 
 class MainActivity : AppCompatActivity() {
 
@@ -47,6 +53,23 @@ class MainActivity : AppCompatActivity() {
     private var bannerHideRunnable: Runnable? = null
     private val bannerHandler = Handler(Looper.getMainLooper())
 
+    private val presetList = listOf(
+        PresetItem(ColorSpace.LAB, "General", "LAB"),
+        PresetItem(ColorSpace.CRGB, "Reds", "CRGB"),
+        PresetItem(ColorSpace.YRD, "Red Ochre", "YRD"),
+        PresetItem(ColorSpace.YRE, "Faint Reds", "YRE"),
+        PresetItem(ColorSpace.YYE, "Yellows", "YYE"),
+        PresetItem(ColorSpace.YBK, "Blacks", "YBK"),
+        PresetItem(ColorSpace.YWE, "Whites", "YWE"),
+        PresetItem(ColorSpace.YDT, "Yellow / Gen", "YDT"),
+        PresetItem(ColorSpace.RGB0, "Deep Reds", "RGB0"),
+        PresetItem(ColorSpace.DIRECT_PCA, "Spectral", "PCA"),
+        PresetItem(ColorSpace.RAW_NORMAL, "Neutral", "RAW")
+    )
+
+    private val presetViews = mutableListOf<View>()
+    private var selectedPresetIndex = 0
+
     private lateinit var tvStatus: TextView
     private lateinit var tvSmoothingLabel: TextView
     private lateinit var tvIntensityLabel: TextView
@@ -56,7 +79,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSwitchCam: Button
     private lateinit var btnAspect: Button
     private lateinit var btnCapture: MaterialButton
-    private lateinit var chipGroupPresets: ChipGroup
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -96,7 +118,6 @@ class MainActivity : AppCompatActivity() {
         btnSwitchCam = findViewById(R.id.btnSwitchCam)
         btnAspect = findViewById(R.id.btnAspect)
         btnCapture = findViewById(R.id.btnCapture)
-        chipGroupPresets = findViewById(R.id.chipGroupPresets)
         focusRingView = findViewById(R.id.focusRingView)
 
         // Initialize decorrelation engine and renderer
@@ -161,30 +182,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupControls() {
-        // Preset selector
-        chipGroupPresets.setOnCheckedStateChangeListener { _, checkedIds ->
-            if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
-            renderer.resetAccumulation()
-            val preset = when (checkedIds[0]) {
-                R.id.chipLab -> ColorSpace.LAB
-                R.id.chipCrgb -> ColorSpace.CRGB
-                R.id.chipYrd -> ColorSpace.YRD
-                R.id.chipYre -> ColorSpace.YRE
-                R.id.chipYye -> ColorSpace.YYE
-                R.id.chipYbk -> ColorSpace.YBK
-                R.id.chipYwe -> ColorSpace.YWE
-                R.id.chipYdt -> ColorSpace.YDT
-                R.id.chipRgb0 -> ColorSpace.RGB0
-                R.id.chipPca -> ColorSpace.DIRECT_PCA
-                R.id.chipNormal -> ColorSpace.RAW_NORMAL
-                else -> ColorSpace.LAB
-            }
-            decorEngine.activeColorSpace = preset
-            if (preset != ColorSpace.RAW_NORMAL) {
-                decorEngine.reset()
+    private fun updatePresetButtonStyles() {
+        for ((idx, view) in presetViews.withIndex()) {
+            val isSelected = (idx == selectedPresetIndex)
+            val pill = view.findViewById<LinearLayout>(R.id.pillPreset)
+            val tvTitle = view.findViewById<TextView>(R.id.tvPresetTitle)
+            val tvCode = view.findViewById<TextView>(R.id.tvPresetCode)
+
+            if (isSelected) {
+                pill.setBackgroundResource(R.drawable.bg_preset_pill_active)
+                tvTitle.setTextColor(ContextCompat.getColor(this, R.color.black))
+                tvCode.setTextColor(ContextCompat.getColor(this, R.color.black))
+                tvCode.alpha = 0.75f
+            } else {
+                pill.setBackgroundResource(R.drawable.bg_preset_pill_inactive)
+                tvTitle.setTextColor(ContextCompat.getColor(this, R.color.white))
+                tvCode.setTextColor(ContextCompat.getColor(this, R.color.white))
+                tvCode.alpha = 0.55f
             }
         }
+    }
+
+    private fun setupControls() {
+        btnAspect.text = if (renderer.isAspectFill) "FILL" else "FIT"
+
+        // Preset selector pills (Top: Main purpose / what it's good at, Bottom: Technical code)
+        val container = findViewById<LinearLayout>(R.id.presetContainer)
+        container.removeAllViews()
+        presetViews.clear()
+
+        val inflater = LayoutInflater.from(this)
+        for ((idx, item) in presetList.withIndex()) {
+            val pillView = inflater.inflate(R.layout.item_preset_button, container, false)
+            val tvTitle = pillView.findViewById<TextView>(R.id.tvPresetTitle)
+            val tvCode = pillView.findViewById<TextView>(R.id.tvPresetCode)
+            tvTitle.text = item.targetDescription
+            tvCode.text = item.code
+
+            pillView.setOnClickListener {
+                if (selectedPresetIndex != idx) {
+                    selectedPresetIndex = idx
+                    renderer.resetAccumulation()
+                    decorEngine.activeColorSpace = item.colorSpace
+                    if (item.colorSpace != ColorSpace.RAW_NORMAL) {
+                        decorEngine.reset()
+                    }
+                    updatePresetButtonStyles()
+                }
+            }
+            container.addView(pillView)
+            presetViews.add(pillView)
+        }
+        updatePresetButtonStyles()
 
         // Temporal Smoothing Slider (1 to 100 -> 0.01 to 1.0)
         seekSmoothing.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
