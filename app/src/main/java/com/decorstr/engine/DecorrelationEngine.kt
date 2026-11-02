@@ -9,10 +9,10 @@ class DecorrelationEngine {
     private val nativeEngine = NativeDecorrelation()
 
     // Configuration
-    var activeColorSpace: ColorSpace = ColorSpace.LAB
-    var alphaSmoothing: Float = 0.15f
-    var isTransformLocked: Boolean = false
-    var targetSigma: Float = 0.25f
+    @Volatile var activeColorSpace: ColorSpace = ColorSpace.LAB
+    @Volatile var alphaSmoothing: Float = 0.15f
+    @Volatile var isTransformLocked: Boolean = false
+    @Volatile var targetSigma: Float = 0.25f
 
     // Current transformation outputs for OpenGL shader uniforms
     // Matrix is 3x3 (row-major), Bias is 3D vector
@@ -26,6 +26,7 @@ class DecorrelationEngine {
     private var prevEigenvectors: FloatArray? = null
     private var isFallbackInitialized = false
 
+    @Synchronized
     fun reset() {
         nativeEngine.reset()
         smoothCov.fill(0f)
@@ -38,29 +39,35 @@ class DecorrelationEngine {
         currentEigenvalues.fill(1f)
     }
 
+    @Synchronized
+    fun getTransformSnapshot(outMatrix: FloatArray, outBias: FloatArray): ColorSpace {
+        System.arraycopy(currentMatrix, 0, outMatrix, 0, 9)
+        System.arraycopy(currentBias, 0, outBias, 0, 3)
+        return activeColorSpace
+    }
+
     // White balance multipliers (R, G, B)
     val whiteBalanceGains = floatArrayOf(2.0f, 1.0f, 1.8f)
 
+    @Synchronized
     fun setWhiteBalanceGains(r: Float, g: Float, b: Float) {
-        synchronized(this) {
-            whiteBalanceGains[0] = 0.8f * whiteBalanceGains[0] + 0.2f * r
-            whiteBalanceGains[1] = 0.8f * whiteBalanceGains[1] + 0.2f * g
-            whiteBalanceGains[2] = 0.8f * whiteBalanceGains[2] + 0.2f * b
-        }
+        whiteBalanceGains[0] = 0.8f * whiteBalanceGains[0] + 0.2f * r
+        whiteBalanceGains[1] = 0.8f * whiteBalanceGains[1] + 0.2f * g
+        whiteBalanceGains[2] = 0.8f * whiteBalanceGains[2] + 0.2f * b
     }
 
+    @Synchronized
     fun resetWhiteBalanceGains(r: Float, g: Float, b: Float) {
-        synchronized(this) {
-            whiteBalanceGains[0] = r
-            whiteBalanceGains[1] = g
-            whiteBalanceGains[2] = b
-        }
+        whiteBalanceGains[0] = r
+        whiteBalanceGains[1] = g
+        whiteBalanceGains[2] = b
     }
 
     /**
      * Process RAW16 (ImageFormat.RAW_SENSOR) frame.
      * Updates [currentMatrix], [currentBias], and [currentEigenvalues].
      */
+    @Synchronized
     fun processRaw16(
         buffer: ByteBuffer,
         width: Int,
@@ -100,6 +107,7 @@ class DecorrelationEngine {
     /**
      * Process RAW10 (ImageFormat.RAW10) frame.
      */
+    @Synchronized
     fun processRaw10(
         buffer: ByteBuffer,
         width: Int,
@@ -135,6 +143,7 @@ class DecorrelationEngine {
      * Pure-Kotlin covariance, smoothing, and whitening calculation.
      * Directly testable in standard JVM unit tests!
      */
+    @Synchronized
     fun updateFromCovariance(
         sampleCov: FloatArray,
         sampleMean: FloatArray,

@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <memory>
+#include <mutex>
 #include "covariance.h"
 #include "whitening.h"
 
@@ -9,17 +10,20 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 static std::unique_ptr<decorstr::WhiteningEngine> gWhiteningEngine;
+static std::mutex gEngineMutex;
 
 extern "C" {
 
 JNIEXPORT void JNICALL
 Java_com_decorstr_engine_NativeDecorrelation_nativeInit(JNIEnv* /*env*/, jobject /*thiz*/) {
+    std::lock_guard<std::mutex> lock(gEngineMutex);
     gWhiteningEngine = std::make_unique<decorstr::WhiteningEngine>();
     LOGI("Native decorstr engine initialized");
 }
 
 JNIEXPORT void JNICALL
 Java_com_decorstr_engine_NativeDecorrelation_nativeReset(JNIEnv* /*env*/, jobject /*thiz*/) {
+    std::lock_guard<std::mutex> lock(gEngineMutex);
     if (gWhiteningEngine) {
         gWhiteningEngine->reset();
     }
@@ -42,10 +46,6 @@ Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer16(
     jboolean lockTransform,
     jfloat targetSigma)
 {
-    if (!gWhiteningEngine) {
-        gWhiteningEngine = std::make_unique<decorstr::WhiteningEngine>();
-    }
-
     const uint16_t* rawData = static_cast<const uint16_t*>(env->GetDirectBufferAddress(byteBuffer));
     if (!rawData) {
         LOGE("Failed to get direct buffer address");
@@ -69,9 +69,16 @@ Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer16(
         blackLevels, whiteLevel, wbGains, mode
     );
 
-    decorstr::WhiteningResult whitened = gWhiteningEngine->updateAndCompute(
-        covRes, alphaSmoothing, lockTransform, mode, targetSigma
-    );
+    decorstr::WhiteningResult whitened;
+    {
+        std::lock_guard<std::mutex> lock(gEngineMutex);
+        if (!gWhiteningEngine) {
+            gWhiteningEngine = std::make_unique<decorstr::WhiteningEngine>();
+        }
+        whitened = gWhiteningEngine->updateAndCompute(
+            covRes, alphaSmoothing, lockTransform, mode, targetSigma
+        );
+    }
 
     // Return 15 floats: [matrix (9), bias (3), eigenvalues (3)]
     jfloatArray result = env->NewFloatArray(15);
@@ -112,10 +119,6 @@ Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer10(
     jboolean lockTransform,
     jfloat targetSigma)
 {
-    if (!gWhiteningEngine) {
-        gWhiteningEngine = std::make_unique<decorstr::WhiteningEngine>();
-    }
-
     const uint8_t* rawData = static_cast<const uint8_t*>(env->GetDirectBufferAddress(byteBuffer));
     if (!rawData) {
         LOGE("Failed to get direct buffer address for RAW10");
@@ -139,9 +142,16 @@ Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer10(
         blackLevels, whiteLevel, wbGains, mode
     );
 
-    decorstr::WhiteningResult whitened = gWhiteningEngine->updateAndCompute(
-        covRes, alphaSmoothing, lockTransform, mode, targetSigma
-    );
+    decorstr::WhiteningResult whitened;
+    {
+        std::lock_guard<std::mutex> lock(gEngineMutex);
+        if (!gWhiteningEngine) {
+            gWhiteningEngine = std::make_unique<decorstr::WhiteningEngine>();
+        }
+        whitened = gWhiteningEngine->updateAndCompute(
+            covRes, alphaSmoothing, lockTransform, mode, targetSigma
+        );
+    }
 
     jfloatArray result = env->NewFloatArray(15);
     if (!result) return nullptr;

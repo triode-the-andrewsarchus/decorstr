@@ -67,6 +67,9 @@ class DecorstrRenderer(
     private var frameHeight = 0
     private var isNewFrameAvailable = false
 
+    private val renderMatrix = FloatArray(9) { if (it % 4 == 0) 1.0f else 0.0f }
+    private val renderBias = FloatArray(3)
+
     fun queueRawFrame(buffer: ByteBuffer, width: Int, height: Int) {
         synchronized(frameLock) {
             pendingFrameBuffer = buffer
@@ -323,17 +326,27 @@ class DecorstrRenderer(
         GLES30.glUniform1i(uRawTextureLoc, 0)
 
         // Bind uniform parameters
+        val activeSpace = decorEngine.getTransformSnapshot(renderMatrix, renderBias)
+        val wbR: Float
+        val wbG: Float
+        val wbB: Float
+        synchronized(frameLock) {
+            wbR = whiteBalanceGains[0]
+            wbG = whiteBalanceGains[1]
+            wbB = whiteBalanceGains[2]
+        }
+
         GLES30.glUniform2f(uTextureSizeLoc, width.toFloat(), height.toFloat())
         GLES30.glUniform1i(uCfaPatternLoc, cfaPattern)
         GLES30.glUniform4f(uBlackLevelLoc, blackLevels[0], blackLevels[1], blackLevels[2], blackLevels[3])
         GLES30.glUniform1f(uWhiteLevelLoc, whiteLevel)
 
-        GLES30.glUniformMatrix3fv(uDecorMatrixLoc, 1, true, decorEngine.currentMatrix, 0)
-        GLES30.glUniform3fv(uDecorBiasLoc, 1, decorEngine.currentBias, 0)
-        GLES30.glUniform1i(uColorSpaceLoc, decorEngine.activeColorSpace.id)
+        GLES30.glUniformMatrix3fv(uDecorMatrixLoc, 1, true, renderMatrix, 0)
+        GLES30.glUniform3fv(uDecorBiasLoc, 1, renderBias, 0)
+        GLES30.glUniform1i(uColorSpaceLoc, activeSpace.id)
         GLES30.glUniform1f(uGammaLoc, gamma)
         GLES30.glUniform1f(uContrastLoc, contrast)
-        GLES30.glUniform3f(uWbGainsLoc, whiteBalanceGains[0], whiteBalanceGains[1], whiteBalanceGains[2])
+        GLES30.glUniform3f(uWbGainsLoc, wbR, wbG, wbB)
 
         // Calculate aspect scale to completely eliminate squishing
         val isRotated = (cameraRotation == 90 || cameraRotation == 270)
@@ -492,16 +505,26 @@ class DecorstrRenderer(
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
         GLES30.glUniform1i(uRawTextureLoc, 0)
 
+        val activeSpace = decorEngine.getTransformSnapshot(renderMatrix, renderBias)
+        val wbR: Float
+        val wbG: Float
+        val wbB: Float
+        synchronized(frameLock) {
+            wbR = whiteBalanceGains[0]
+            wbG = whiteBalanceGains[1]
+            wbB = whiteBalanceGains[2]
+        }
+
         GLES30.glUniform2f(uTextureSizeLoc, rawWidth.toFloat(), rawHeight.toFloat())
         GLES30.glUniform1i(uCfaPatternLoc, cfaPattern)
         GLES30.glUniform4f(uBlackLevelLoc, blackLevels[0], blackLevels[1], blackLevels[2], blackLevels[3])
         GLES30.glUniform1f(uWhiteLevelLoc, whiteLevel)
-        GLES30.glUniformMatrix3fv(uDecorMatrixLoc, 1, true, decorEngine.currentMatrix, 0)
-        GLES30.glUniform3fv(uDecorBiasLoc, 1, decorEngine.currentBias, 0)
-        GLES30.glUniform1i(uColorSpaceLoc, decorEngine.activeColorSpace.id)
+        GLES30.glUniformMatrix3fv(uDecorMatrixLoc, 1, true, renderMatrix, 0)
+        GLES30.glUniform3fv(uDecorBiasLoc, 1, renderBias, 0)
+        GLES30.glUniform1i(uColorSpaceLoc, activeSpace.id)
         GLES30.glUniform1f(uGammaLoc, gamma)
         GLES30.glUniform1f(uContrastLoc, contrast)
-        GLES30.glUniform3f(uWbGainsLoc, whiteBalanceGains[0], whiteBalanceGains[1], whiteBalanceGains[2])
+        GLES30.glUniform3f(uWbGainsLoc, wbR, wbG, wbB)
 
         // 1.0f scale fills the 12MP FBO completely
         GLES30.glUniform2f(uScaleLoc, 1.0f, 1.0f)
