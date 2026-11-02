@@ -209,5 +209,23 @@ class DecorrelationEngineTest {
         assertTrue("R gain should be within realistic Bayer range", rGain in 1.2f..3.5f)
         assertTrue("B gain should be within realistic Bayer range", bGain in 1.1f..3.5f)
     }
+
+    @Test
+    fun testRightHandedEigenvectorsDeterminant() {
+        val cov = floatArrayOf(
+            3.0f, 0.8f, 0.4f,
+            0.8f, 2.0f, 0.3f,
+            0.4f, 0.3f, 1.0f
+        )
+        // Pass a prevV with negative determinant to force a reflection before the det check
+        val reflectedPrevV = floatArrayOf(
+            1f, 0f,  0f,
+            0f, 1f,  0f,
+            0f, 0f, -1f
+        )
+        val (_, V) = Matrix3x3.eigenSymmetric(cov, reflectedPrevV)
+        val vMat = Matrix3x3(V)
+        assertEquals("Eigenvector matrix must be right-handed (det = +1)", 1.0f, vMat.determinant(), 1e-4f)
+    }
 }
 

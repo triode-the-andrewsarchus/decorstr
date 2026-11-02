@@ -179,6 +179,16 @@ class Matrix3x3(val data: FloatArray = FloatArray(9)) {
                 }
             }
 
+            // Ensure right-handed coordinate system (det(V) > 0)
+            val det = sortedV[0] * (sortedV[4] * sortedV[8] - sortedV[5] * sortedV[7]) -
+                      sortedV[1] * (sortedV[3] * sortedV[8] - sortedV[5] * sortedV[6]) +
+                      sortedV[2] * (sortedV[3] * sortedV[7] - sortedV[4] * sortedV[6])
+            if (det < 0.0f) {
+                sortedV[0 * 3 + 2] = -sortedV[0 * 3 + 2]
+                sortedV[1 * 3 + 2] = -sortedV[1 * 3 + 2]
+                sortedV[2 * 3 + 2] = -sortedV[2 * 3 + 2]
+            }
+
             return Pair(sortedLambdas, sortedV)
         }
     }

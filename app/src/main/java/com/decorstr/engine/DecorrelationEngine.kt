@@ -1,6 +1,7 @@
 package com.decorstr.engine
 
 import java.nio.ByteBuffer
+import kotlin.math.cbrt
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -215,6 +216,60 @@ class DecorrelationEngine {
         }
     }
 
+    private fun labF(t: Float): Float {
+        val delta = 6.0f / 29.0f
+        val delta3 = delta * delta * delta
+        return if (t > delta3) {
+            cbrt(t)
+        } else {
+            t / (3.0f * delta * delta) + 4.0f / 29.0f
+        }
+    }
+
+    internal fun convertRgbToSpace(r: Float, g: Float, b: Float, mode: ColorSpace): Vec3 {
+        if (mode == ColorSpace.CRGB || mode == ColorSpace.RGB0 ||
+            mode == ColorSpace.DIRECT_PCA || mode == ColorSpace.RAW_NORMAL) {
+            return Vec3(r, g, b)
+        }
+        if (mode == ColorSpace.LAB) {
+            val Xn = 0.95047f
+            val Yn = 1.00000f
+            val Zn = 1.08883f
+            val X = 0.4124564f * r + 0.3575761f * g + 0.1804375f * b
+            val Y = 0.2126729f * r + 0.7151522f * g + 0.0721750f * b
+            val Z = 0.0193339f * r + 0.1191920f * g + 0.9503041f * b
+            val fx = labF(max(0f, X / Xn))
+            val fy = labF(max(0f, Y / Yn))
+            val fz = labF(max(0f, Z / Zn))
+            val L = 116.0f * fy - 16.0f
+            val a = 500.0f * (fx - fy)
+            val bVal = 200.0f * (fy - fz)
+            return Vec3(L * 0.01f, (a + 128.0f) / 255.0f, (bVal + 128.0f) / 255.0f)
+        }
+
+        val y = 0.299f * r + 0.587f * g + 0.114f * b
+        val uc = -0.14713f * r - 0.28886f * g + 0.436f * b
+        val vc = 0.615f * r - 0.51499f * g - 0.10001f * b
+
+        return when (mode) {
+            ColorSpace.YDT -> Vec3(y, uc + 0.5f, vc + 0.5f)
+            ColorSpace.YRD -> Vec3(y, uc * 0.5f + 0.5f, vc * 2.0f + 0.5f)
+            ColorSpace.YRE -> Vec3(y, uc * 0.35f + 0.5f, vc * 4.0f + 0.5f)
+            ColorSpace.YYE -> Vec3(y, -uc * 2.5f + 0.5f, vc * 0.8f + 0.5f)
+            ColorSpace.YBK -> Vec3((y - 0.5f) * 2.2f + 0.5f, uc * 0.5f + 0.5f, vc * 0.5f + 0.5f)
+            ColorSpace.YWE -> Vec3((y - 0.5f) * 2.5f + 0.5f, uc * 0.7f + 0.5f, vc * 0.7f + 0.5f)
+            ColorSpace.YBL -> Vec3(y, uc * 3.0f + 0.5f, vc * 0.7f + 0.5f)
+            ColorSpace.YGN -> {
+                val cGreen = (-0.4892f * uc - 0.8721f * vc) * 2.5f
+                val cOrtho = ( 0.8721f * uc - 0.4892f * vc) * 0.8f
+                val uOut = -0.4892f * cGreen + 0.8721f * cOrtho + 0.5f
+                val vOut = -0.8721f * cGreen - 0.4892f * cOrtho + 0.5f
+                Vec3(y, uOut, vOut)
+            }
+            else -> Vec3(r, g, b)
+        }
+    }
+
     private fun processFallbackFromBayer16(
         buffer: ByteBuffer,
         width: Int,
@@ -235,6 +290,7 @@ class DecorrelationEngine {
         var count = 0
 
         val normRange = FloatArray(4) { i -> max(1.0f, whiteLevel - blackLevels[i]) }
+        val mode = activeColorSpace
 
         for (y in 0 until (height - 1) step stepY) {
             val row0Off = y * rowStridePixels
@@ -265,19 +321,21 @@ class DecorrelationEngine {
                 val gWb = (g * whiteBalanceGains[1]).coerceIn(0f, 1f)
                 val bWb = (b * whiteBalanceGains[2]).coerceIn(0f, 1f)
 
-                if ((rWb > 0.98f && gWb > 0.98f && bWb > 0.98f) || (rWb < 0.01f && gWb < 0.01f && bWb < 0.01f)) {
+                if ((rWb > 0.985f && gWb > 0.985f && bWb > 0.985f) || (rWb < 0.005f && gWb < 0.005f && bWb < 0.005f)) {
                     continue
                 }
 
-                sum[0] += rWb.toDouble(); sum[1] += gWb.toDouble(); sum[2] += bWb.toDouble()
-                sumSq[0] += (rWb * rWb).toDouble(); sumSq[1] += (rWb * gWb).toDouble(); sumSq[2] += (rWb * bWb).toDouble()
-                sumSq[3] += (gWb * rWb).toDouble(); sumSq[4] += (gWb * gWb).toDouble(); sumSq[5] += (gWb * bWb).toDouble()
-                sumSq[6] += (bWb * rWb).toDouble(); sumSq[7] += (bWb * gWb).toDouble(); sumSq[8] += (bWb * bWb).toDouble()
+                val c = convertRgbToSpace(rWb, gWb, bWb, mode)
+
+                sum[0] += c.x.toDouble(); sum[1] += c.y.toDouble(); sum[2] += c.z.toDouble()
+                sumSq[0] += (c.x * c.x).toDouble(); sumSq[1] += (c.x * c.y).toDouble(); sumSq[2] += (c.x * c.z).toDouble()
+                sumSq[3] += (c.y * c.x).toDouble(); sumSq[4] += (c.y * c.y).toDouble(); sumSq[5] += (c.y * c.z).toDouble()
+                sumSq[6] += (c.z * c.x).toDouble(); sumSq[7] += (c.z * c.y).toDouble(); sumSq[8] += (c.z * c.z).toDouble()
                 count++
             }
         }
 
-        if (count > 32) {
+        if (count >= 64) {
             val invN = 1.0 / count
             val mean = FloatArray(3) { i -> (sum[i] * invN).toFloat() }
             val cov = FloatArray(9)
@@ -286,7 +344,10 @@ class DecorrelationEngine {
                     cov[i * 3 + j] = ((sumSq[i * 3 + j] * invN) - (mean[i] * mean[j])).toFloat()
                 }
             }
-            updateFromCovariance(cov, mean, activeColorSpace)
+            cov[1] = (cov[1] + cov[3]) * 0.5f; cov[3] = cov[1]
+            cov[2] = (cov[2] + cov[6]) * 0.5f; cov[6] = cov[2]
+            cov[5] = (cov[5] + cov[7]) * 0.5f; cov[7] = cov[5]
+            updateFromCovariance(cov, mean, mode)
         }
     }
 }
