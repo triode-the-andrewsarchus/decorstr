@@ -399,7 +399,6 @@ class RawCameraManager(
         selectedRawFormat = when {
             supportedFormats.contains(ImageFormat.RAW_SENSOR) -> ImageFormat.RAW_SENSOR
             supportedFormats.contains(ImageFormat.RAW10) -> ImageFormat.RAW10
-            supportedFormats.contains(ImageFormat.RAW12) -> ImageFormat.RAW12
             else -> ImageFormat.RAW_SENSOR
         }
 
@@ -904,16 +903,19 @@ class RawCameraManager(
                 val captureLatch = CountDownLatch(1)
                 inFlightCaptureLatch = captureLatch
                 var savedDngUri: Uri? = null
+                val isRawSensorDngSupported = (selectedRawFormat == ImageFormat.RAW_SENSOR)
 
                 // 1. Submit RAW DNG saving immediately (takes ownership of image, closes it in finally)
                 captureExecutor.execute {
                     try {
-                        savedDngUri = mediaSaver.saveRawDng(
-                            image,
-                            chars!!,
-                            capResult!!,
-                            rotation
-                        )
+                        if (isRawSensorDngSupported) {
+                            savedDngUri = mediaSaver.saveRawDng(
+                                image,
+                                chars!!,
+                                capResult!!,
+                                rotation
+                            )
+                        }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error saving RAW DNG", e)
                     } finally {

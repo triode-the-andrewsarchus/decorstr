@@ -64,6 +64,14 @@ class DecorrelationEngine {
         whiteBalanceGains[2] = b
     }
 
+    fun unpackRaw10To16(
+        raw10Buffer: ByteBuffer,
+        out16Buffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        rowStrideBytes: Int
+    ): Boolean = nativeEngine.unpackRaw10To16(raw10Buffer, out16Buffer, width, height, rowStrideBytes)
+
     /**
      * Process RAW16 (ImageFormat.RAW_SENSOR) frame.
      * Updates [currentMatrix], [currentBias], and [currentEigenvalues].
@@ -137,6 +145,10 @@ class DecorrelationEngine {
             System.arraycopy(result, 0, currentMatrix, 0, 9)
             System.arraycopy(result, 9, currentBias, 0, 3)
             System.arraycopy(result, 12, currentEigenvalues, 0, 3)
+        } else {
+            processFallbackFromBayer10(
+                buffer, width, height, rowStrideBytes, bayerPattern, blackLevels, whiteLevel
+            )
         }
     }
 
@@ -332,6 +344,97 @@ class DecorrelationEngine {
                 sumSq[3] += (c.y * c.x).toDouble(); sumSq[4] += (c.y * c.y).toDouble(); sumSq[5] += (c.y * c.z).toDouble()
                 sumSq[6] += (c.z * c.x).toDouble(); sumSq[7] += (c.z * c.y).toDouble(); sumSq[8] += (c.z * c.z).toDouble()
                 count++
+            }
+        }
+
+        if (count >= 64) {
+            val invN = 1.0 / count
+            val mean = FloatArray(3) { i -> (sum[i] * invN).toFloat() }
+            val cov = FloatArray(9)
+            for (i in 0..2) {
+                for (j in 0..2) {
+                    cov[i * 3 + j] = ((sumSq[i * 3 + j] * invN) - (mean[i] * mean[j])).toFloat()
+                }
+            }
+            cov[1] = (cov[1] + cov[3]) * 0.5f; cov[3] = cov[1]
+            cov[2] = (cov[2] + cov[6]) * 0.5f; cov[6] = cov[2]
+            cov[5] = (cov[5] + cov[7]) * 0.5f; cov[7] = cov[5]
+            updateFromCovariance(cov, mean, mode)
+        }
+    }
+
+    private fun processFallbackFromBayer10(
+        buffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        rowStrideBytes: Int,
+        bayerPattern: Int,
+        blackLevels: FloatArray,
+        whiteLevel: Float
+    ) {
+        val targetSamplesX = 120
+        val targetSamplesY = 90
+        val stepX = max(4, ((width / targetSamplesX) / 4) * 4)
+        val stepY = max(2, (height / targetSamplesY) and 1.inv())
+
+        val sum = DoubleArray(3)
+        val sumSq = DoubleArray(9)
+        var count = 0
+
+        val normRange = FloatArray(4) { i -> max(1.0f, whiteLevel - blackLevels[i]) }
+        val mode = activeColorSpace
+
+        for (y in 0 until (height - 1) step stepY) {
+            val row0Off = y * rowStrideBytes
+            val row1Off = (y + 1) * rowStrideBytes
+
+            var x = 0
+            while (x + 3 < width) {
+                val byteOffset = (x / 4) * 5
+                val r0b0 = buffer.get(row0Off + byteOffset + 0).toInt() and 0xFF
+                val r0b1 = buffer.get(row0Off + byteOffset + 1).toInt() and 0xFF
+                val r0b4 = buffer.get(row0Off + byteOffset + 4).toInt() and 0xFF
+                val r1b0 = buffer.get(row1Off + byteOffset + 0).toInt() and 0xFF
+                val r1b1 = buffer.get(row1Off + byteOffset + 1).toInt() and 0xFF
+                val r1b4 = buffer.get(row1Off + byteOffset + 4).toInt() and 0xFF
+
+                val p00Raw = ((r0b0 shl 2) or ((r0b4 ushr 0) and 0x03)).toFloat()
+                val p01Raw = ((r0b1 shl 2) or ((r0b4 ushr 2) and 0x03)).toFloat()
+                val p10Raw = ((r1b0 shl 2) or ((r1b4 ushr 0) and 0x03)).toFloat()
+                val p11Raw = ((r1b1 shl 2) or ((r1b4 ushr 2) and 0x03)).toFloat()
+
+                val p00 = ((p00Raw - blackLevels[0]) / normRange[0]).coerceIn(0f, 1f)
+                val p01 = ((p01Raw - blackLevels[1]) / normRange[1]).coerceIn(0f, 1f)
+                val p10 = ((p10Raw - blackLevels[2]) / normRange[2]).coerceIn(0f, 1f)
+                val p11 = ((p11Raw - blackLevels[3]) / normRange[3]).coerceIn(0f, 1f)
+
+                val r: Float
+                val g: Float
+                val b: Float
+                when (bayerPattern) {
+                    0 -> { r = p00; g = (p01 + p10) * 0.5f; b = p11 }
+                    1 -> { g = (p00 + p11) * 0.5f; r = p01; b = p10 }
+                    2 -> { g = (p00 + p11) * 0.5f; b = p01; r = p10 }
+                    else -> { b = p00; g = (p01 + p10) * 0.5f; r = p11 }
+                }
+
+                val rWb = (r * whiteBalanceGains[0]).coerceIn(0f, 1f)
+                val gWb = (g * whiteBalanceGains[1]).coerceIn(0f, 1f)
+                val bWb = (b * whiteBalanceGains[2]).coerceIn(0f, 1f)
+
+                if ((rWb > 0.985f && gWb > 0.985f && bWb > 0.985f) || (rWb < 0.005f && gWb < 0.005f && bWb < 0.005f)) {
+                    x += stepX
+                    continue
+                }
+
+                val c = convertRgbToSpace(rWb, gWb, bWb, mode)
+
+                sum[0] += c.x.toDouble(); sum[1] += c.y.toDouble(); sum[2] += c.z.toDouble()
+                sumSq[0] += (c.x * c.x).toDouble(); sumSq[1] += (c.x * c.y).toDouble(); sumSq[2] += (c.x * c.z).toDouble()
+                sumSq[3] += (c.y * c.x).toDouble(); sumSq[4] += (c.y * c.y).toDouble(); sumSq[5] += (c.y * c.z).toDouble()
+                sumSq[6] += (c.z * c.x).toDouble(); sumSq[7] += (c.z * c.y).toDouble(); sumSq[8] += (c.z * c.z).toDouble()
+                count++
+                x += stepX
             }
         }
 

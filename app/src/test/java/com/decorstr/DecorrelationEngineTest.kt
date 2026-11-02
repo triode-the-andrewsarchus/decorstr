@@ -227,5 +227,59 @@ class DecorrelationEngineTest {
         val vMat = Matrix3x3(V)
         assertEquals("Eigenvector matrix must be right-handed (det = +1)", 1.0f, vMat.determinant(), 1e-4f)
     }
+
+    @Test
+    fun testUnpackRaw10To16AndProcessRaw10Fallback() {
+        val engine = DecorrelationEngine()
+        val width = 64
+        val height = 64
+        val rowStrideBytes = (width / 4) * 5
+        val raw10 = java.nio.ByteBuffer.allocateDirect(rowStrideBytes * height)
+
+        // Fill with synthetic 10-bit gradient
+        for (y in 0 until height) {
+            val rowOff = y * rowStrideBytes
+            for (g in 0 until width / 4) {
+                val p0 = (100 + (g * 7 + y * 3) % 700)
+                val p1 = (150 + (g * 11 + y * 5) % 700)
+                val p2 = (200 + (g * 13 + y * 7) % 700)
+                val p3 = (250 + (g * 17 + y * 9) % 700)
+                val off = rowOff + g * 5
+                raw10.put(off + 0, (p0 ushr 2).toByte())
+                raw10.put(off + 1, (p1 ushr 2).toByte())
+                raw10.put(off + 2, (p2 ushr 2).toByte())
+                raw10.put(off + 3, (p3 ushr 2).toByte())
+                val lsb = ((p0 and 3) shl 0) or ((p1 and 3) shl 2) or ((p2 and 3) shl 4) or ((p3 and 3) shl 6)
+                raw10.put(off + 4, lsb.toByte())
+            }
+        }
+
+        val out16 = java.nio.ByteBuffer.allocateDirect(width * height * 2)
+            .order(java.nio.ByteOrder.nativeOrder())
+        assertTrue(engine.unpackRaw10To16(raw10, out16, width, height, rowStrideBytes))
+
+        val shorts = out16.asShortBuffer()
+        assertEquals(100, shorts.get(0).toInt() and 0xFFFF)
+        assertEquals(150, shorts.get(1).toInt() and 0xFFFF)
+        assertEquals(200, shorts.get(2).toInt() and 0xFFFF)
+        assertEquals(250, shorts.get(3).toInt() and 0xFFFF)
+
+        engine.activeColorSpace = ColorSpace.LAB
+        engine.alphaSmoothing = 1.0f
+        engine.processRaw10(
+            raw10,
+            width,
+            height,
+            rowStrideBytes,
+            0,
+            floatArrayOf(64f, 64f, 64f, 64f),
+            1023f
+        )
+        val outMat = FloatArray(9)
+        val outBias = FloatArray(3)
+        val space = engine.getTransformSnapshot(outMat, outBias)
+        assertEquals(ColorSpace.LAB, space)
+        assertTrue("Whitening matrix diagonal should be non-zero", abs(outMat[0]) > 0.01f)
+    }
 }
 

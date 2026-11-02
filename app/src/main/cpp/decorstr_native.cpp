@@ -173,4 +173,51 @@ Java_com_decorstr_engine_NativeDecorrelation_nativeProcessBayer10(
     return result;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_decorstr_engine_NativeDecorrelation_nativeUnpackRaw10To16(
+    JNIEnv* env,
+    jobject /*thiz*/,
+    jobject raw10Buffer,
+    jobject out16Buffer,
+    jint width,
+    jint height,
+    jint rowStrideBytes)
+{
+    if (!raw10Buffer || !out16Buffer || width <= 0 || height <= 0) {
+        return JNI_FALSE;
+    }
+    const uint8_t* src = static_cast<const uint8_t*>(env->GetDirectBufferAddress(raw10Buffer));
+    uint16_t* dst = static_cast<uint16_t*>(env->GetDirectBufferAddress(out16Buffer));
+    jlong srcCap = env->GetDirectBufferCapacity(raw10Buffer);
+    jlong dstCap = env->GetDirectBufferCapacity(out16Buffer);
+
+    jlong minSrcBytes = static_cast<jlong>(height - 1) * rowStrideBytes + (static_cast<jlong>(width) / 4) * 5;
+    jlong minDstBytes = static_cast<jlong>(width) * height * 2;
+    if (!src || !dst || srcCap < minSrcBytes || dstCap < minDstBytes) {
+        return JNI_FALSE;
+    }
+
+    int alignedWidth = width & ~3;
+    for (int y = 0; y < height; ++y) {
+        const uint8_t* srcRow = src + static_cast<size_t>(y) * rowStrideBytes;
+        uint16_t* dstRow = dst + static_cast<size_t>(y) * width;
+        int byteIdx = 0;
+        for (int x = 0; x < alignedWidth; x += 4, byteIdx += 5) {
+            uint8_t b0 = srcRow[byteIdx + 0];
+            uint8_t b1 = srcRow[byteIdx + 1];
+            uint8_t b2 = srcRow[byteIdx + 2];
+            uint8_t b3 = srcRow[byteIdx + 3];
+            uint8_t b4 = srcRow[byteIdx + 4];
+            dstRow[x + 0] = (static_cast<uint16_t>(b0) << 2) | ((b4 >> 0) & 0x03);
+            dstRow[x + 1] = (static_cast<uint16_t>(b1) << 2) | ((b4 >> 2) & 0x03);
+            dstRow[x + 2] = (static_cast<uint16_t>(b2) << 2) | ((b4 >> 4) & 0x03);
+            dstRow[x + 3] = (static_cast<uint16_t>(b3) << 2) | ((b4 >> 6) & 0x03);
+        }
+        for (int x = alignedWidth; x < width; ++x) {
+            dstRow[x] = 0;
+        }
+    }
+    return JNI_TRUE;
+}
+
 } // extern "C"

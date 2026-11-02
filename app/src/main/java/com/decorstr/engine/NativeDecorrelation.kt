@@ -125,6 +125,51 @@ class NativeDecorrelation {
         )
     }
 
+    fun unpackRaw10To16(
+        raw10Buffer: ByteBuffer,
+        out16Buffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        rowStrideBytes: Int
+    ): Boolean {
+        if (isNativeLoaded && raw10Buffer.isDirect && out16Buffer.isDirect) {
+            if (nativeUnpackRaw10To16(raw10Buffer, out16Buffer, width, height, rowStrideBytes)) {
+                return true
+            }
+        }
+        val minSrcBytes = (height - 1) * rowStrideBytes + (width / 4) * 5
+        val minDstShorts = width * height
+        if (width <= 0 || height <= 0 || raw10Buffer.capacity() < minSrcBytes || out16Buffer.capacity() < minDstShorts * 2) {
+            return false
+        }
+        val dstShorts = out16Buffer.asShortBuffer()
+        val alignedWidth = width and 3.inv()
+        for (y in 0 until height) {
+            val rowOff = y * rowStrideBytes
+            val dstRowOff = y * width
+            var byteIdx = rowOff
+            var x = 0
+            while (x < alignedWidth) {
+                val b0 = raw10Buffer.get(byteIdx + 0).toInt() and 0xFF
+                val b1 = raw10Buffer.get(byteIdx + 1).toInt() and 0xFF
+                val b2 = raw10Buffer.get(byteIdx + 2).toInt() and 0xFF
+                val b3 = raw10Buffer.get(byteIdx + 3).toInt() and 0xFF
+                val b4 = raw10Buffer.get(byteIdx + 4).toInt() and 0xFF
+                dstShorts.put(dstRowOff + x + 0, ((b0 shl 2) or ((b4 ushr 0) and 0x03)).toShort())
+                dstShorts.put(dstRowOff + x + 1, ((b1 shl 2) or ((b4 ushr 2) and 0x03)).toShort())
+                dstShorts.put(dstRowOff + x + 2, ((b2 shl 2) or ((b4 ushr 4) and 0x03)).toShort())
+                dstShorts.put(dstRowOff + x + 3, ((b3 shl 2) or ((b4 ushr 6) and 0x03)).toShort())
+                x += 4
+                byteIdx += 5
+            }
+            while (x < width) {
+                dstShorts.put(dstRowOff + x, 0)
+                x++
+            }
+        }
+        return true
+    }
+
     private external fun nativeInit()
     private external fun nativeReset()
     private external fun nativeProcessBayer16(
@@ -156,4 +201,12 @@ class NativeDecorrelation {
         lockTransform: Boolean,
         targetSigma: Float
     ): FloatArray?
+
+    private external fun nativeUnpackRaw10To16(
+        raw10Buffer: ByteBuffer,
+        out16Buffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        rowStrideBytes: Int
+    ): Boolean
 }
