@@ -308,9 +308,9 @@ class DecorstrRenderer(
     }
 
     private var isOffscreenCapturePending = false
-    private var offscreenCaptureCallback: ((Bitmap) -> Unit)? = null
+    private var offscreenCaptureCallback: ((Bitmap?) -> Unit)? = null
 
-    fun requestOffscreenCapture(callback: (Bitmap) -> Unit) {
+    fun requestOffscreenCapture(callback: (Bitmap?) -> Unit) {
         synchronized(frameLock) {
             offscreenCaptureCallback = callback
             isOffscreenCapturePending = true
@@ -378,6 +378,15 @@ class DecorstrRenderer(
 
         // If no camera frame has arrived yet, don't draw uninitialized quad
         if (width <= 0 || height <= 0) {
+            val earlyCb: ((Bitmap?) -> Unit)? = synchronized(frameLock) {
+                if (isOffscreenCapturePending) {
+                    val cb = offscreenCaptureCallback
+                    offscreenCaptureCallback = null
+                    isOffscreenCapturePending = false
+                    cb
+                } else null
+            }
+            earlyCb?.invoke(null)
             return
         }
 
@@ -511,7 +520,7 @@ class DecorstrRenderer(
         }
 
         // Process full-resolution offscreen capture if requested
-        val offscreenCb: ((Bitmap) -> Unit)? = synchronized(frameLock) {
+        val offscreenCb: ((Bitmap?) -> Unit)? = synchronized(frameLock) {
             if (isOffscreenCapturePending) {
                 val cb = offscreenCaptureCallback
                 offscreenCaptureCallback = null
@@ -522,12 +531,12 @@ class DecorstrRenderer(
             }
         }
 
-        if (offscreenCb != null && width > 0 && height > 0) {
+        if (offscreenCb != null) {
             renderOffscreenSnapshot(width, height, offscreenCb)
         }
     }
 
-    private fun renderOffscreenSnapshot(rawWidth: Int, rawHeight: Int, callback: (Bitmap) -> Unit) {
+    private fun renderOffscreenSnapshot(rawWidth: Int, rawHeight: Int, callback: (Bitmap?) -> Unit) {
         val isRotated = (cameraRotation == 90 || cameraRotation == 270)
         val targetW = if (isRotated) rawHeight else rawWidth
         val targetH = if (isRotated) rawWidth else rawHeight
@@ -562,6 +571,7 @@ class DecorstrRenderer(
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             GLES30.glDeleteTextures(1, texs, 0)
             GLES30.glDeleteFramebuffers(1, fbos, 0)
+            callback(null)
             return
         }
 

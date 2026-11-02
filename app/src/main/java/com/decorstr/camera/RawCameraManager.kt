@@ -80,10 +80,17 @@ class RawCameraManager(
     @Volatile private var inFlightCaptureLatch: CountDownLatch? = null
 
     fun captureStill(callback: (Uri?, Uri?) -> Unit) {
+        if (!isStarted || cameraChoices.isEmpty()) {
+            mainHandler.post { callback(null, null) }
+            return
+        }
+        val prevCb: ((Uri?, Uri?) -> Unit)?
         synchronized(this) {
+            prevCb = pendingCaptureCallback
             pendingCaptureCallback = callback
             isCaptureRequested = true
         }
+        prevCb?.let { mainHandler.post { it(null, null) } }
     }
 
     // Available RAW camera choices
@@ -943,14 +950,16 @@ class RawCameraManager(
                     captureExecutor.execute {
                         var savedJpegUri: Uri? = null
                         try {
-                            savedJpegUri = mediaSaver.saveDecorrelatedJpeg(
-                                stretchedBitmap,
-                                colorSpaceName
-                            )
+                            if (stretchedBitmap != null) {
+                                savedJpegUri = mediaSaver.saveDecorrelatedJpeg(
+                                    stretchedBitmap,
+                                    colorSpaceName
+                                )
+                            }
                         } catch (e: Exception) {
                             Log.e(TAG, "Error saving stretched JPEG", e)
                         } finally {
-                            stretchedBitmap.recycle()
+                            stretchedBitmap?.recycle()
                             onCaptured?.invoke(savedJpegUri, savedDngUri)
                         }
                     }
@@ -976,6 +985,14 @@ class RawCameraManager(
     }
 
     private fun closeCameraInternal() {
+        val strandedCaptureCb: ((Uri?, Uri?) -> Unit)?
+        synchronized(this) {
+            isCaptureRequested = false
+            strandedCaptureCb = pendingCaptureCallback
+            pendingCaptureCallback = null
+        }
+        strandedCaptureCb?.let { mainHandler.post { it(null, null) } }
+
         try {
             inFlightCaptureLatch?.await(1000, TimeUnit.MILLISECONDS)
         } catch (e: InterruptedException) {

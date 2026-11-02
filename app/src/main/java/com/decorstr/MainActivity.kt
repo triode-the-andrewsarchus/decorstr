@@ -90,9 +90,20 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            cameraManager.start()
+            startCameraOrShowUnavailable()
         } else {
+            tvStatus.text = "Camera permission required"
             showBannerToast("Camera permission is required for real-time RAW preview", isLong = true)
+        }
+    }
+
+    private fun startCameraOrShowUnavailable() {
+        if (cameraManager.cameraChoices.isEmpty()) {
+            tvStatus.text = "No RAW camera available"
+            tvStatus.setTextColor(ContextCompat.getColor(this, R.color.accent_red))
+            showBannerToast("Device does not expose any RAW-capable cameras", isLong = true)
+        } else {
+            cameraManager.start()
         }
     }
 
@@ -179,6 +190,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatusText() {
+        if (this::cameraManager.isInitialized && cameraManager.cameraChoices.isEmpty()) {
+            tvStatus.text = "No RAW camera available"
+            tvStatus.setTextColor(ContextCompat.getColor(this, R.color.accent_red))
+            return
+        }
         if (lastStableState) {
             tvStatus.text = String.format("%.1f FPS | STABLE ✦", lastFps)
             tvStatus.setTextColor(ContextCompat.getColor(this, R.color.accent_cyan))
@@ -418,7 +434,7 @@ class MainActivity : AppCompatActivity() {
         stabilityTracker.start()
         btnCapture.isEnabled = true
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            cameraManager.start()
+            startCameraOrShowUnavailable()
         } else {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
