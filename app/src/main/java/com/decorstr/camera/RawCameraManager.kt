@@ -870,7 +870,7 @@ class RawCameraManager(
             val rowStride = plane.rowStride
             val pixelStride = plane.pixelStride
 
-            // Process covariance and compute whitening transform
+            // Process covariance, compute whitening transform, and copy/unpack frame to renderer
             if (selectedRawFormat == ImageFormat.RAW_SENSOR) {
                 val rowStridePixels = rowStride / (pixelStride.coerceAtLeast(2))
                 decorEngine.processRaw16(
@@ -882,6 +882,8 @@ class RawCameraManager(
                     activeBlackLevels,
                     activeWhiteLevel
                 )
+                buffer.rewind()
+                renderer.queueRawFrame(buffer, image.width, image.height, rowStridePixels)
             } else if (selectedRawFormat == ImageFormat.RAW10) {
                 decorEngine.processRaw10(
                     buffer,
@@ -892,10 +894,9 @@ class RawCameraManager(
                     activeBlackLevels,
                     activeWhiteLevel
                 )
+                buffer.rewind()
+                renderer.queueRaw10Frame(buffer, image.width, image.height, rowStride)
             }
-
-            buffer.rewind()
-            renderer.queueRawFrame(buffer, image.width, image.height)
 
             if (canCapture) {
                 val rotation = renderer.cameraRotation

@@ -60,22 +60,79 @@ class DecorstrRenderer(
     private var surfaceWidth = 0
     private var surfaceHeight = 0
 
-    // Frame synchronization
+    // Frame synchronization (double-buffered direct ByteBuffers to decouple from Camera2 Image lifecycle)
     private val frameLock = Any()
+    private val stagingLock = Any()
+    private var stagingFrameBuffer: ByteBuffer? = null
     private var pendingFrameBuffer: ByteBuffer? = null
     private var frameWidth = 0
     private var frameHeight = 0
+    private var frameRowStridePixels = 0
     private var isNewFrameAvailable = false
 
     private val renderMatrix = FloatArray(9) { if (it % 4 == 0) 1.0f else 0.0f }
     private val renderBias = FloatArray(3)
 
-    fun queueRawFrame(buffer: ByteBuffer, width: Int, height: Int) {
-        synchronized(frameLock) {
-            pendingFrameBuffer = buffer
-            frameWidth = width
-            frameHeight = height
-            isNewFrameAvailable = true
+    private fun ensureDirectBuffer(current: ByteBuffer?, minCapacityBytes: Int): ByteBuffer {
+        if (current != null && current.capacity() >= minCapacityBytes) {
+            current.clear()
+            return current
+        }
+        return ByteBuffer.allocateDirect(minCapacityBytes).order(ByteOrder.nativeOrder())
+    }
+
+    fun queueRawFrame(buffer: ByteBuffer, width: Int, height: Int, rowStridePixels: Int = width) {
+        if (width <= 0 || height <= 0) return
+        val effectiveStridePixels = rowStridePixels.coerceAtLeast(width)
+        val requiredBytes = ((height - 1) * effectiveStridePixels + width) * 2
+        synchronized(stagingLock) {
+            val src = buffer.duplicate()
+            src.rewind()
+            val copyBytes = minOf(src.remaining(), requiredBytes)
+            if (copyBytes < width * height * 2) return
+
+            val dst = ensureDirectBuffer(stagingFrameBuffer, requiredBytes)
+            src.limit(copyBytes)
+            dst.put(src)
+            dst.rewind()
+
+            synchronized(frameLock) {
+                if (frameWidth != width || frameHeight != height) {
+                    isAccumulationResetRequested = true
+                }
+                val oldPending = pendingFrameBuffer
+                pendingFrameBuffer = dst
+                stagingFrameBuffer = oldPending
+                frameWidth = width
+                frameHeight = height
+                frameRowStridePixels = effectiveStridePixels
+                isNewFrameAvailable = true
+            }
+        }
+    }
+
+    fun queueRaw10Frame(raw10Buffer: ByteBuffer, width: Int, height: Int, rowStrideBytes: Int) {
+        if (width <= 0 || height <= 0) return
+        val requiredBytes = width * height * 2
+        synchronized(stagingLock) {
+            val dst = ensureDirectBuffer(stagingFrameBuffer, requiredBytes)
+            val unpacked = decorEngine.unpackRaw10To16(raw10Buffer, dst, width, height, rowStrideBytes)
+            if (!unpacked) return
+            dst.position(0)
+            dst.limit(requiredBytes)
+
+            synchronized(frameLock) {
+                if (frameWidth != width || frameHeight != height) {
+                    isAccumulationResetRequested = true
+                }
+                val oldPending = pendingFrameBuffer
+                pendingFrameBuffer = dst
+                stagingFrameBuffer = oldPending
+                frameWidth = width
+                frameHeight = height
+                frameRowStridePixels = width
+                isNewFrameAvailable = true
+            }
         }
     }
 
@@ -282,15 +339,24 @@ class DecorstrRenderer(
 
         val width: Int
         val height: Int
+        var didUploadNewFrame = false
 
         // Upload new texture frame if available
         synchronized(frameLock) {
             width = frameWidth
             height = frameHeight
-            if (isNewFrameAvailable && pendingFrameBuffer != null && width > 0 && height > 0) {
+            val stridePixels = frameRowStridePixels
+            val buf = pendingFrameBuffer
+            if (isNewFrameAvailable && buf != null && width > 0 && height > 0) {
                 GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTextureId)
+                GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
+                GLES30.glPixelStorei(
+                    GLES30.GL_UNPACK_ROW_LENGTH,
+                    if (stridePixels > width) stridePixels else 0
+                )
 
+                buf.position(0)
                 // R16UI format for 16-bit RAW Bayer pixels
                 GLES30.glTexImage2D(
                     GLES30.GL_TEXTURE_2D,
@@ -301,10 +367,12 @@ class DecorstrRenderer(
                     0,
                     GLES30.GL_RED_INTEGER,
                     GLES30.GL_UNSIGNED_SHORT,
-                    pendingFrameBuffer
+                    buf
                 )
+                GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
 
                 isNewFrameAvailable = false
+                didUploadNewFrame = true
             }
         }
 
@@ -393,32 +461,34 @@ class DecorstrRenderer(
                 r
             }
 
-            // When moving or after reset, beta = 1.0 (instant, overwrites history)
-            // When steady (stability -> 1.0), beta drops to 0.12 (88% history, ~8x noise reduction)
-            val beta = if (isReset) 1.0f else (1.0f - 0.88f * stability).coerceIn(0.12f, 1.0f)
+            if (didUploadNewFrame || isReset) {
+                // When moving or after reset, beta = 1.0 (instant, overwrites history)
+                // When steady (stability -> 1.0), beta drops to 0.12 (88% history, ~8x noise reduction)
+                val beta = if (isReset) 1.0f else (1.0f - 0.88f * stability).coerceIn(0.12f, 1.0f)
 
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, accumFboId)
-            GLES30.glViewport(0, 0, surfaceWidth, surfaceHeight)
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, accumFboId)
+                GLES30.glViewport(0, 0, surfaceWidth, surfaceHeight)
 
-            if (isReset) {
-                GLES30.glClearColor(0f, 0f, 0f, 1f)
-                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-            }
+                if (isReset) {
+                    GLES30.glClearColor(0f, 0f, 0f, 1f)
+                    GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+                }
 
-            if (beta < 0.98f) {
-                GLES30.glEnable(GLES30.GL_BLEND)
-                GLES30.glBlendColor(0f, 0f, 0f, beta)
-                GLES30.glBlendFunc(GLES30.GL_CONSTANT_ALPHA, GLES30.GL_ONE_MINUS_CONSTANT_ALPHA)
-            } else {
+                if (beta < 0.98f) {
+                    GLES30.glEnable(GLES30.GL_BLEND)
+                    GLES30.glBlendColor(0f, 0f, 0f, beta)
+                    GLES30.glBlendFunc(GLES30.GL_CONSTANT_ALPHA, GLES30.GL_ONE_MINUS_CONSTANT_ALPHA)
+                } else {
+                    GLES30.glDisable(GLES30.GL_BLEND)
+                }
+
+                // Draw quad into accumulation buffer
+                GLES30.glBindVertexArray(vaoId)
+                GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+                GLES30.glBindVertexArray(0)
+
                 GLES30.glDisable(GLES30.GL_BLEND)
             }
-
-            // Draw quad into accumulation buffer
-            GLES30.glBindVertexArray(vaoId)
-            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
-            GLES30.glBindVertexArray(0)
-
-            GLES30.glDisable(GLES30.GL_BLEND)
 
             // Blit accumulated result to screen (FBO 0)
             GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, accumFboId)
