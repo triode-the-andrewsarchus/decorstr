@@ -157,8 +157,17 @@ class RawCameraManager(
                     val hasRaw = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
                     val isLogical = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
                     val facing = chars.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
-                    val fl = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
+                    val availFls = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                     val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    val fl = if (availFls != null && availFls.size > 1 && sensorSize != null) {
+                        val diag = kotlin.math.sqrt(sensorSize.width * sensorSize.width + sensorSize.height * sensorSize.height)
+                        availFls.firstOrNull { f ->
+                            val eq = if (diag > 0.01f) (f * (43.27f / diag)).toInt() else 0
+                            eq in 21..35 || (f >= 3.0f && f < 6.5f)
+                        } ?: availFls.firstOrNull() ?: 0f
+                    } else {
+                        availFls?.firstOrNull() ?: 0f
+                    }
                     val equiv35mm = if (sensorSize != null && fl > 0f) {
                         val diag = kotlin.math.sqrt(sensorSize.width * sensorSize.width + sensorSize.height * sensorSize.height)
                         if (diag > 0.01f) (fl * (43.27f / diag)).toInt() else 0
@@ -199,8 +208,8 @@ class RawCameraManager(
                                         if (diag > 0.01f) (pFl * (43.27f / diag)).toInt() else 0
                                     } else 0
 
-                                    // Skip if physical camera duplicates the parent logical camera's default sensor
-                                    if (abs(pFl - fl) < 0.2f && pFacing == facing) {
+                                    // Skip if physical camera duplicates the parent logical camera's default RAW sensor
+                                    if (hasRaw && abs(pFl - fl) < 0.2f && pFacing == facing) {
                                         continue
                                     }
 
