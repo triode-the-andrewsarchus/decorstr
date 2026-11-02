@@ -664,8 +664,10 @@ class RawCameraManager(
             val activeArray = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
                 ?: Rect(0, 0, previewSize.width, previewSize.height)
 
-            val sensorX = (normX * activeArray.width()).toInt().coerceIn(0, activeArray.width() - 1)
-            val sensorY = (normY * activeArray.height()).toInt().coerceIn(0, activeArray.height() - 1)
+            val sensorX = (activeArray.left + (normX * activeArray.width()).toInt())
+                .coerceIn(activeArray.left, activeArray.right - 1)
+            val sensorY = (activeArray.top + (normY * activeArray.height()).toInt())
+                .coerceIn(activeArray.top, activeArray.bottom - 1)
 
             val halfW = (activeArray.width() * 0.06f).toInt().coerceAtLeast(60)
             val halfH = (activeArray.height() * 0.06f).toInt().coerceAtLeast(60)
